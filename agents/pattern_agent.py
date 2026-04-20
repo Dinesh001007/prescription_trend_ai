@@ -23,12 +23,12 @@ def run_pattern_agent(df: pd.DataFrame, col_map: dict) -> dict:
 
     try:
         # Top drugs overall
-        drug_counts = df[drug_col].value_counts().head(20)
+        drug_counts = df[drug_col].value_counts().head(10)
         fig_top = px.bar(
             x=drug_counts.values,
             y=drug_counts.index,
             orientation="h",
-            title="Top 20 Most Prescribed Drugs",
+            title="Top 10 Most Prescribed Drugs",
             labels={"x": "Prescription Count", "y": "Drug"},
             color=drug_counts.values,
             color_continuous_scale="Teal",

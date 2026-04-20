@@ -4,10 +4,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 try:
-    from prophet import Prophet
-    PROPHET_AVAILABLE = True
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
+    STATSMODELS_AVAILABLE = True
 except ImportError:
-    PROPHET_AVAILABLE = False
+    STATSMODELS_AVAILABLE = False
 
 
 def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
@@ -31,6 +33,9 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
         df_trend = df.copy()
         df_trend["__date"] = pd.to_datetime(df_trend[date_col], errors="coerce")
         df_trend = df_trend.dropna(subset=["__date"])
+        
+        if qty_col:
+            df_trend[qty_col] = pd.to_numeric(df_trend[qty_col], errors="coerce").fillna(0)
 
         if len(df_trend) < 5:
             result["status"] = "insufficient_data"
@@ -93,19 +98,28 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
         overall_ts.columns = ["ds", "y"]
         overall_ts = overall_ts.dropna()
 
-        if PROPHET_AVAILABLE and len(overall_ts) >= 10:
+        if STATSMODELS_AVAILABLE and len(overall_ts) >= 10:
             try:
-                m = Prophet(
-                    yearly_seasonality=True,
-                    weekly_seasonality=(freq == "D"),
-                    daily_seasonality=False,
-                    changepoint_prior_scale=0.05,
-                )
-                m.fit(overall_ts)
-
                 periods = {"D": 30, "W": 12, "MS": 6}.get(freq, 12)
-                future = m.make_future_dataframe(periods=periods, freq=freq)
-                forecast = m.predict(future)
+                seasonal_periods = {"D": 7, "W": 52, "MS": 12}.get(freq, 7)
+                
+                # Minimum data constraint for ETS
+                if len(overall_ts) >= 2 * seasonal_periods:
+                    model = ExponentialSmoothing(overall_ts["y"], trend="add", seasonal="add", seasonal_periods=seasonal_periods)
+                else:
+                    model = ExponentialSmoothing(overall_ts["y"], trend="add", seasonal=None)
+                
+                fit_model = model.fit(optimized=True)
+                forecast_vals = fit_model.forecast(periods)
+                
+                # Build DS for forecast
+                last_date = overall_ts["ds"].iloc[-1]
+                if freq == "D":
+                    future_ds = [last_date + pd.Timedelta(days=i) for i in range(1, periods + 1)]
+                elif freq == "W":
+                    future_ds = [last_date + pd.Timedelta(weeks=i) for i in range(1, periods + 1)]
+                else:
+                    future_ds = [last_date + pd.DateOffset(months=i) for i in range(1, periods + 1)]
 
                 fig_forecast = go.Figure()
                 fig_forecast.add_trace(go.Scatter(
@@ -115,20 +129,13 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
                     marker=dict(size=5),
                 ))
                 fig_forecast.add_trace(go.Scatter(
-                    x=forecast["ds"], y=forecast["yhat"],
+                    x=future_ds, y=forecast_vals,
                     mode="lines", name="Forecast",
                     line=dict(color="#FFC300", width=2, dash="dash"),
                 ))
-                fig_forecast.add_trace(go.Scatter(
-                    x=pd.concat([forecast["ds"], forecast["ds"][::-1]]),
-                    y=pd.concat([forecast["yhat_upper"], forecast["yhat_lower"][::-1]]),
-                    fill="toself",
-                    fillcolor="rgba(255,195,0,0.15)",
-                    line=dict(color="rgba(0,0,0,0)"),
-                    name="Confidence Interval",
-                ))
+                
                 fig_forecast.update_layout(
-                    title="Prescription Volume: Historical + Prophet Forecast",
+                    title="Prescription Volume: Historical + Holt-Winters Forecast",
                     xaxis_title="Date",
                     yaxis_title="Prescription Volume",
                     template="plotly_dark",
@@ -136,37 +143,19 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
                     plot_bgcolor="rgba(0,0,0,0)",
                     font_color="#E8EAF0",
                 )
-                result["figures"].append(("Prophet Forecast", fig_forecast))
-
-                # Trend components
-                fig_comp = go.Figure()
-                fig_comp.add_trace(go.Scatter(
-                    x=forecast["ds"], y=forecast["trend"],
-                    mode="lines", name="Trend",
-                    line=dict(color="#6C63FF", width=2),
-                ))
-                fig_comp.update_layout(
-                    title="Underlying Prescription Trend",
-                    xaxis_title="Date",
-                    yaxis_title="Trend Component",
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#E8EAF0",
-                )
-                result["figures"].append(("Trend Component", fig_comp))
+                result["figures"].append(("Forecast", fig_forecast))
 
                 last_actual = overall_ts["y"].iloc[-1]
-                forecast_end = forecast["yhat"].iloc[-1]
+                forecast_end = forecast_vals.iloc[-1]
                 direction = "increasing" if forecast_end > last_actual else "decreasing"
                 result["summary"] = (
-                    f"Time-series trend analysis using Prophet completed.\n"
+                    f"Time-series trend analysis using Holt-Winters completed.\n"
                     f"Date range: {overall_ts['ds'].min().date()} to {overall_ts['ds'].max().date()}.\n"
                     f"Forecast horizon: {periods} periods ahead.\n"
                     f"Trend direction: {direction} (current: {last_actual:.0f} → forecast: {forecast_end:.0f})."
                 )
             except Exception as e:
-                result["summary"] = f"Prophet forecast error: {str(e)}. Showing historical trend only."
+                result["summary"] = f"Forecast error: {str(e)}. Showing historical trend only."
                 _plot_simple_trend(overall_ts, result)
         else:
             _plot_simple_trend(overall_ts, result)

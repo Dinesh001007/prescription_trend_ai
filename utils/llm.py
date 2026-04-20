@@ -2,7 +2,8 @@ import requests
 import json
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "phi4-mini"
+# MODEL = "phi4-mini"
+MODEL = "MedAIBase/MedGemma1.5:4b"
 
 
 def query_llm(prompt: str, system: str = "", temperature: float = 0.3) -> str:
@@ -90,9 +91,15 @@ def identify_columns(columns: list, sample_data: list) -> dict:
         start = result.find("{")
         end = result.rfind("}") + 1
         mapping = json.loads(result[start:end])
+        valid_cats = {"drug_name", "patient_id", "date", "diagnosis", "age", "gender", "dosage", "frequency", "region", "risk_score", "quantity", "prescriber", "other"}
         for col in columns:
-            if col not in mapping:
+            val = mapping.get(col, "other")
+            if isinstance(val, list) and len(val) > 0:
+                val = val[0]
+            if not isinstance(val, str) or val not in valid_cats:
                 mapping[col] = "other"
+            else:
+                mapping[col] = val
         return mapping
     except Exception:
         return {col: "other" for col in columns}
@@ -111,3 +118,36 @@ def generate_insights(summary: str, column_map: dict) -> str:
     )
     prompt = f"Column schema: {json.dumps(column_map)}\n\nDataset analysis summary:\n{summary}"
     return query_llm(prompt, system=system, temperature=0.35)
+
+
+def analyze_image_report(filename: str, ocr_text: str = "", modality: str | None = None, temperature: float = 0.3) -> str:
+    system = (
+        "You are a clinical radiology analyst. Interpret radiology scan reports such as X-ray, CT, MRI, and other medical images. "
+        "Provide a concise but clinically meaningful description of findings, likely impressions, potential severity, and recommended next steps."
+    )
+    modality_prefix = f"This appears to be a {modality} report." if modality else "This appears to be a medical imaging report."
+    if ocr_text:
+        prompt = (
+            f"A medical scan report was uploaded: {filename}.\n"
+            f"{modality_prefix}\n"
+            "Use the extracted text below to provide a radiology impression, highlight any abnormalities, and suggest follow-up actions.\n\n"
+            "REPORT TEXT:\n"
+            f"{ocr_text}\n\n"
+            "Summarize the findings in clear medical language and include key impressions and recommended next steps."
+        )
+    else:
+        prompt = (
+            f"A medical scan report was uploaded: {filename}.\n"
+            f"{modality_prefix}\n"
+            "No OCR text is available. If this is a radiology report, explain that the system needs report text to summarize findings accurately. "
+            "If only a raw imaging file is available, be transparent that raw pixel-based image interpretation is not supported in this workflow."
+        )
+    return query_llm(prompt, system=system, temperature=temperature)
+
+
+def explain_image_report(context: str) -> str:
+    system = (
+        "You are a clinical radiology specialist. Answer follow-up questions about imaging findings clearly and accurately. "
+        "Use clinical reasoning and avoid speculation beyond the information provided."
+    )
+    return query_llm(context, system=system, temperature=0.3)

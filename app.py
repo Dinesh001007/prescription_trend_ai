@@ -13,6 +13,8 @@ from utils.llm import (
     identify_columns,
     generate_insights,
     explain_analysis,
+    analyze_image_report,
+    explain_image_report,
 )
 from utils.data_loader import (
     load_file,
@@ -24,6 +26,12 @@ from agents.cohort_agent import run_cohort_agent
 from agents.anomaly_agent import run_anomaly_agent
 from agents.trend_agent import run_trend_agent
 from agents.pattern_agent import run_pattern_agent
+from utils.image_utils import (
+    is_image_file,
+    is_pdf_file,
+    load_image_from_bytes,
+    extract_text_from_file,
+)
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -284,7 +292,7 @@ st.markdown("""
     <div class="logo-icon">💊</div>
     <div>
         <div class="app-title">Prescription Trend AI</div>
-        <div class="app-sub">Clinical Intelligence Platform · Powered by Llama 3</div>
+        <div class="app-sub">Clinical Intelligence Platform · Powered by Phi-4 mini</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -294,14 +302,14 @@ with st.sidebar:
     st.markdown("### 🔍 Input Mode")
     mode = st.radio(
         "",
-        ["💊 Drug Lookup", "📂 Dataset Analysis"],
+        ["💊 Drug Lookup", "📂 Dataset Analysis", "🩺 Image Report"],
         label_visibility="collapsed",
     )
 
-    st.markdown("### 📤 Upload Data")
+    st.markdown("### 📤 Upload File")
     uploaded_file = st.file_uploader(
-        "CSV / JSON / Excel",
-        type=["csv", "json", "xlsx", "xls"],
+        "Upload dataset or scan report (supports CSV, JSON, Excel, and image scan reports)",
+        type=["csv", "json", "xlsx", "xls", "png", "jpg", "jpeg", "bmp", "tiff", "tif"],
         label_visibility="collapsed",
     )
 
@@ -312,11 +320,11 @@ with st.sidebar:
     run_risk = st.checkbox("Risk Analysis (XGBoost)", value=True)
     run_cohort = st.checkbox("Cohort Clustering (KMeans)", value=True)
     run_anomaly = st.checkbox("Anomaly Detection (IsoForest)", value=True)
-    run_trend = st.checkbox("Trend Forecasting (Prophet)", value=True)
+    run_trend = st.checkbox("Trend Forecasting (Holt-Winters)", value=True)
     run_pattern = st.checkbox("Co-Prescription Patterns", value=True)
 
     st.markdown("### 🤖 Model")
-    st.markdown('<span class="pill">Llama 3 · Ollama</span>', unsafe_allow_html=True)
+    st.markdown('<span class="pill">Phi-4 mini · Ollama</span>', unsafe_allow_html=True)
     if st.button("Test Ollama Connection"):
         resp = query_llm("Say 'OK' only.")
         if "ERROR_OLLAMA_DOWN" in resp:
@@ -354,7 +362,7 @@ if mode == "💊 Drug Lookup":
         search_btn = st.button("🔍 Analyze Drug", use_container_width=True)
 
     if search_btn and drug_query.strip():
-        with st.spinner("Consulting clinical knowledge base via Llama 3..."):
+        with st.spinner("Consulting clinical knowledge base via Phi-4 mini..."):
             info = get_drug_info(drug_query.strip())
 
         if "ERROR_OLLAMA_DOWN" in info:
@@ -420,21 +428,120 @@ if mode == "💊 Drug Lookup":
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
 
 
-# ─── Dataset Analysis Mode ────────────────────────────────────────────────────
+# ─── Image Report Mode ───────────────────────────────────────────────────────
+elif mode == "🩺 Image Report":
+    st.markdown('<div class="section-header">🩺 Scan Report Analysis</div>', unsafe_allow_html=True)
+
+    supported_types = ["pdf", "png", "jpg", "jpeg", "bmp", "tiff", "tif"]
+    report_file = uploaded_file if uploaded_file and uploaded_file.name.lower().endswith(tuple(supported_types)) else None
+    if report_file is None:
+        st.info("Upload a PDF or image scan report. Use filenames or report text containing xray, ct, or mri for better modality detection.")
+        report_file = st.file_uploader(
+            "Upload scan report file",
+            type=supported_types,
+            label_visibility="collapsed",
+        )
+        if report_file:
+            st.success(f"✓ {report_file.name}")
+
+    def detect_imaging_modality(filename: str, text: str) -> str | None:
+        combined = f"{filename} {text}".lower()
+        if any(k in combined for k in ["x-ray", "xray", "chest x-ray", "chest xray"]):
+            return "X-ray"
+        if any(k in combined for k in ["ct", "computed tomography", "ct scan"]):
+            return "CT"
+        if any(k in combined for k in ["mri", "magnetic resonance"]):
+            return "MRI"
+        return None
+
+    if report_file:
+        if st.session_state.get("last_image") != report_file.name:
+            st.session_state.report_analysis = None
+            st.session_state.image_ocr = None
+            st.session_state["last_image"] = report_file.name
+
+        with st.spinner("Extracting text from report..."):
+            extracted_text = extract_text_from_file(report_file)
+            st.session_state.image_ocr = extracted_text
+
+        if is_pdf_file(report_file.name):
+            st.markdown("### Uploaded PDF report")
+            if extracted_text:
+                st.markdown("Text extracted from PDF.")
+                with st.expander("📝 Extracted Text", expanded=False):
+                    st.text_area("", extracted_text, height=220)
+            else:
+                st.warning("No text was extracted from the PDF. The file may be a scanned image PDF.")
+        else:
+            st.markdown("### Uploaded Image Report")
+            if extracted_text:
+                with st.expander("📝 OCR Extracted Text", expanded=False):
+                    st.text_area("", extracted_text, height=220)
+            else:
+                st.info("No text was extracted from the image. The current workflow can only interpret text-based reports.")
+
+        modality = detect_imaging_modality(report_file.name, extracted_text or "")
+        if modality:
+            st.markdown(f"**Detected modality:** {modality}")
+
+        if st.button("🔍 Analyze Scan Report", use_container_width=True):
+            with st.spinner("Analyzing report with Phi-4 mini..."):
+                report_analysis = analyze_image_report(
+                    report_file.name,
+                    extracted_text or "",
+                    modality=modality,
+                )
+                st.session_state.report_analysis = report_analysis
+
+        if st.session_state.get("report_analysis"):
+            st.markdown('<div class="section-header">📋 Report Findings</div>', unsafe_allow_html=True)
+            if "ERROR_OLLAMA_DOWN" in st.session_state.report_analysis:
+                st.error("Ollama is not running. Please start it with `ollama serve`.")
+            else:
+                st.markdown(st.session_state.report_analysis)
+
+            st.markdown('<div class="section-header">💬 Ask Follow-up Questions</div>', unsafe_allow_html=True)
+            if prompt := st.chat_input("Ask a question about this scan report..."):
+                if not hasattr(st.session_state, "image_chat_history"):
+                    st.session_state.image_chat_history = []
+                st.session_state.image_chat_history.append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                with st.chat_message("assistant"):
+                    with st.spinner("Formulating answer..."):
+                        context = (
+                            f"Scan report analysis:\n{st.session_state.report_analysis}\n\n"
+                            f"Follow-up question: {prompt}"
+                        )
+                        response = explain_image_report(context)
+                        if "ERROR_OLLAMA_DOWN" in response:
+                            response = "⚠️ Ollama is not running. Please start it with `ollama serve`."
+                        st.markdown(response)
+                        st.session_state.image_chat_history.append({"role": "assistant", "content": response})
+
+            if hasattr(st.session_state, "image_chat_history"):
+                for msg in st.session_state.image_chat_history:
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
+
+# ─── Dataset Analysis Mode ───────────────────────────────────────────────────
 else:
     st.markdown('<div class="section-header">📂 Dataset Analysis</div>', unsafe_allow_html=True)
 
     # Load file
     if uploaded_file:
-        if st.session_state.df is None or st.session_state.get("last_file") != uploaded_file.name:
-            try:
-                df = load_file(uploaded_file)
-                st.session_state.df = df
-                st.session_state.col_map = None
-                st.session_state.analysis_done = False
-                st.session_state["last_file"] = uploaded_file.name
-            except Exception as e:
-                st.error(f"Failed to load file: {e}")
+        if uploaded_file.name.lower().endswith((".csv", ".json", ".xlsx", ".xls")):
+            if st.session_state.df is None or st.session_state.get("last_file") != uploaded_file.name:
+                try:
+                    df = load_file(uploaded_file)
+                    st.session_state.df = df
+                    st.session_state.col_map = None
+                    st.session_state.analysis_done = False
+                    st.session_state["last_file"] = uploaded_file.name
+                except Exception as e:
+                    st.error(f"Failed to load file: {e}")
+        else:
+            st.warning("Please upload a dataset file (CSV, JSON, or Excel) for Dataset Analysis.")
 
     df = st.session_state.df
 
@@ -490,7 +597,7 @@ else:
         st.markdown('<div class="section-header">🧠 Auto Column Identification (LLM)</div>', unsafe_allow_html=True)
 
         if st.session_state.col_map is None:
-            with st.spinner("Llama 3 is identifying your column roles..."):
+            with st.spinner("Phi-4 mini is identifying your column roles..."):
                 sample = get_sample_rows(df, 3)
                 col_map = identify_columns(df.columns.tolist(), sample)
                 st.session_state.col_map = col_map
@@ -521,10 +628,13 @@ else:
             override_cols = st.columns(3)
             for i, col in enumerate(df.columns):
                 with override_cols[i % 3]:
+                    col_cat = col_map.get(col, "other")
+                    if col_cat not in categories:
+                        col_cat = "other"
                     updated_map[col] = st.selectbox(
                         col,
                         categories,
-                        index=categories.index(col_map.get(col, "other")),
+                        index=categories.index(col_cat),
                         key=f"col_{col}",
                     )
             if st.button("Apply Override"):
@@ -581,7 +691,7 @@ else:
                     summaries.append(f"[{key.upper()} AGENT]: {res.get('summary', '')}")
                 overall_summary = build_summary(df, col_map) + "\n\n" + "\n".join(summaries)
 
-                with st.spinner("Llama 3 generating clinical insights..."):
+                with st.spinner("Phi-4 mini generating clinical insights..."):
                     llm_insights = generate_insights(overall_summary, col_map)
                     st.session_state.llm_insights = llm_insights
 
@@ -594,7 +704,7 @@ else:
             results = st.session_state.analysis_results
 
             # LLM Insights
-            st.markdown('<div class="section-header">🤖 Llama 3 Clinical Insights</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">🤖 Phi-4 mini Clinical Insights</div>', unsafe_allow_html=True)
             if hasattr(st.session_state, "llm_insights"):
                 if "ERROR_OLLAMA_DOWN" in st.session_state.llm_insights:
                     st.error("Ollama not running. Start with `ollama serve`.")

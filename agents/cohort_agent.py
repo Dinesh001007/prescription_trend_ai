@@ -96,7 +96,9 @@ def run_cohort_agent(df: pd.DataFrame, col_map: dict) -> dict:
         # Cohort profile: mean values per cohort
         numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
         if numeric_cols:
-            cohort_profile = cohort_df.groupby("__cohort")[numeric_cols[:6]].mean().reset_index()
+            X_with_cohort = X.copy()
+            X_with_cohort["__cohort"] = cohort_df["__cohort"]
+            cohort_profile = X_with_cohort.groupby("__cohort")[numeric_cols[:6]].mean().reset_index()
             melted = cohort_profile.melt(id_vars="__cohort", var_name="Feature", value_name="Mean Value")
             fig_profile = px.bar(
                 melted,
