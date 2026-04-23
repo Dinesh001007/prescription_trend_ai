@@ -1,25 +1,31 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder
-from xgboost import XGBClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import roc_auc_score
+from xgboost import XGBClassifier
 import plotly.express as px
-import plotly.graph_objects as go
 
 
-def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
+def run_risk_agent_v2(df: pd.DataFrame, col_map: dict) -> dict:
     """
-    Risk Agent: Uses XGBoost to identify high-risk prescriptions or patients.
-    Works with any numeric/categorical columns available.
-    Returns: risk scores, feature importances, visualizations.
+    Improved Risk Agent:
+    - Proper encoding (OneHot)
+    - Better synthetic target
+    - Handles imbalance
+    - Uses percentile threshold
     """
+
     result = {"status": "ok", "figures": [], "summary": "", "risk_df": None}
 
-    # Select usable columns
+    # -------------------------------
+    # 1. Feature selection
+    # -------------------------------
     feature_cols = []
     target_col = None
 
-    # Check for explicit risk score column
     for col, cat in col_map.items():
         if cat == "risk_score" and col in df.columns:
             target_col = col
@@ -28,152 +34,118 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
 
     if len(feature_cols) < 2:
         result["status"] = "insufficient_columns"
-        result["summary"] = "Not enough feature columns for risk analysis."
+        result["summary"] = "Not enough features."
         return result
 
-    # Build feature matrix
     X = df[feature_cols].copy()
-    encoders = {}
 
-    for col in X.columns:
-        if X[col].dtype == object or str(X[col].dtype) == "category":
-            le = LabelEncoder()
-            X[col] = le.fit_transform(X[col].astype(str).fillna("unknown"))
-            encoders[col] = le
-        else:
-            X[col] = pd.to_numeric(X[col], errors="coerce").fillna(X[col].median() if X[col].notna().any() else 0)
+    # -------------------------------
+    # 2. Column split
+    # -------------------------------
+    categorical_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
 
-    # Create synthetic target if no risk column exists
+    # -------------------------------
+    # 3. Preprocessing
+    # -------------------------------
+    preprocessor = ColumnTransformer([
+        ("num", StandardScaler(), numeric_cols),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
+    ])
+
+    # -------------------------------
+    # 4. Target creation (better)
+    # -------------------------------
     if target_col is None:
-        # Use anomaly-style heuristic: flag top 20% by combined z-score as high risk
-        numeric_X = X.select_dtypes(include=[np.number])
-        if numeric_X.shape[1] == 0:
-            result["status"] = "no_numeric"
-            result["summary"] = "No numeric columns found for risk scoring."
-            return result
-        z_scores = (numeric_X - numeric_X.mean()) / (numeric_X.std() + 1e-9)
-        combined_score = z_scores.abs().mean(axis=1)
-        y = (combined_score > combined_score.quantile(0.80)).astype(int)
+        # Risk heuristic (better than raw z-score)
+        score = 0
+
+        if "dosage" in df.columns:
+            score += pd.to_numeric(df["dosage"], errors="coerce").fillna(0)
+
+        if "frequency" in df.columns:
+            score += df["frequency"].astype(str).str.len()
+
+        # Normalize
+        score = (score - score.mean()) / (score.std() + 1e-9)
+
+        # Top 25% as high risk
+        y = (score > np.quantile(score, 0.75)).astype(int)
     else:
-        raw_target = df[target_col].copy()
-        if raw_target.dtype == object:
-            le = LabelEncoder()
-            y = pd.Series(le.fit_transform(raw_target.astype(str).fillna("unknown")))
+        y_raw = df[target_col]
+        if y_raw.dtype == object:
+            y = pd.factorize(y_raw)[0]
         else:
-            y = pd.to_numeric(raw_target, errors="coerce").fillna(0)
-            median_val = y.median()
-            y = (y > median_val).astype(int)
+            y = (pd.to_numeric(y_raw, errors="coerce") > y_raw.median()).astype(int)
 
-    # Align indices
-    X = X.reset_index(drop=True)
-    y = y.reset_index(drop=True)
+    # -------------------------------
+    # 5. Train/Test
+    # -------------------------------
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Train XGBoost
+    # Handle imbalance
+    scale_pos_weight = (len(y_train) - sum(y_train)) / (sum(y_train) + 1e-9)
+
+    model = Pipeline([
+        ("prep", preprocessor),
+        ("xgb", XGBClassifier(
+            n_estimators=200,
+            max_depth=5,
+            learning_rate=0.05,
+            scale_pos_weight=scale_pos_weight,
+            random_state=42,
+            eval_metric="logloss"
+        ))
+    ])
+
     try:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        model = XGBClassifier(n_estimators=100, max_depth=4, random_state=42, eval_metric="logloss", verbosity=0)
         model.fit(X_train, y_train)
 
-        # Predict risk scores on full dataset
+        # Predictions
         risk_proba = model.predict_proba(X)[:, 1]
-        risk_labels = ["High Risk" if p > 0.5 else "Low Risk" for p in risk_proba]
+
+        # Dynamic threshold (top 25%)
+        threshold = np.quantile(risk_proba, 0.75)
+        risk_labels = np.where(risk_proba >= threshold, "High Risk", "Low Risk")
 
         risk_df = df.copy()
         risk_df["__risk_score"] = risk_proba
         risk_df["__risk_label"] = risk_labels
+
         result["risk_df"] = risk_df
 
-        # Feature importances
-        importances = model.feature_importances_
-        feat_imp = pd.DataFrame({"Feature": feature_cols, "Importance": importances})
-        feat_imp = feat_imp.sort_values("Importance", ascending=True).tail(10)
+        # -------------------------------
+        # 6. Evaluation
+        # -------------------------------
+        test_pred = model.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, test_pred)
 
-        fig_imp = px.bar(
-            feat_imp,
-            x="Importance",
-            y="Feature",
-            orientation="h",
-            title="Top Risk Factors (Feature Importance)",
-            color="Importance",
-            color_continuous_scale="Reds",
-            template="plotly_dark",
+        # -------------------------------
+        # 7. Visualization
+        # -------------------------------
+        fig = px.histogram(
+            risk_df,
+            x="__risk_score",
+            color="__risk_label",
+            title="Risk Score Distribution"
         )
-        fig_imp.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#E8EAF0",
-            showlegend=False,
-        )
-        result["figures"].append(("Risk Factor Importance", fig_imp))
+        result["figures"].append(("Risk Distribution", fig))
 
-        # Risk distribution
-        fig_dist = go.Figure()
-        fig_dist.add_trace(go.Histogram(
-            x=risk_proba,
-            nbinsx=30,
-            name="Risk Score Distribution",
-            marker_color="#FF6B6B",
-            opacity=0.85,
-        ))
-        fig_dist.update_layout(
-            title="Risk Score Distribution",
-            xaxis_title="Risk Probability",
-            yaxis_title="Count",
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#E8EAF0",
-        )
-        result["figures"].append(("Risk Score Distribution", fig_dist))
+        # -------------------------------
+        # 8. Summary
+        # -------------------------------
+        high_risk_count = (risk_labels == "High Risk").sum()
 
-        # Risk heatmap if region column exists
-        region_col = next((c for c, cat in col_map.items() if cat == "region" and c in df.columns), None)
-        drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
-
-        if region_col and drug_col:
-            heatmap_data = risk_df.groupby([region_col, drug_col])["__risk_score"].mean().reset_index()
-            pivot = heatmap_data.pivot(index=region_col, columns=drug_col, values="__risk_score").fillna(0)
-            fig_heat = px.imshow(
-                pivot,
-                title="Risk Heatmap: Region vs Drug",
-                color_continuous_scale="RdYlGn_r",
-                template="plotly_dark",
-                aspect="auto",
-            )
-            fig_heat.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                font_color="#E8EAF0",
-            )
-            result["figures"].append(("Risk Heatmap", fig_heat))
-        elif drug_col:
-            drug_risk = risk_df.groupby(drug_col)["__risk_score"].mean().sort_values(ascending=False).head(15)
-            fig_drug_risk = px.bar(
-                x=drug_risk.index,
-                y=drug_risk.values,
-                title="Average Risk Score by Drug",
-                labels={"x": "Drug", "y": "Avg Risk Score"},
-                color=drug_risk.values,
-                color_continuous_scale="RdYlGn_r",
-                template="plotly_dark",
-            )
-            fig_drug_risk.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#E8EAF0",
-                showlegend=False,
-            )
-            result["figures"].append(("Drug Risk Scores", fig_drug_risk))
-
-        high_risk_count = sum(1 for p in risk_proba if p > 0.5)
         result["summary"] = (
-            f"Risk Analysis completed on {len(df)} records.\n"
-            f"High-risk prescriptions identified: {high_risk_count} ({100*high_risk_count/len(df):.1f}%).\n"
-            f"Top risk factors: {', '.join(feat_imp.tail(3)['Feature'].tolist())}.\n"
-            f"Model trained with XGBoost on {len(feature_cols)} features."
+            f"Analyzed {len(df)} records.\n"
+            f"High-risk cases: {high_risk_count} ({100*high_risk_count/len(df):.1f}%).\n"
+            f"Model AUC: {auc:.3f}.\n"
+            f"Dynamic threshold used (top 25%).\n"
+            f"Proper encoding + imbalance handling applied.\n"
         )
 
     except Exception as e:
         result["status"] = "error"
-        result["summary"] = f"Risk agent error: {str(e)}"
+        result["summary"] = str(e)
 
     return result

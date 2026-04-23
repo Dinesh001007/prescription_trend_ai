@@ -16,9 +16,9 @@ from utils.llm import (
 )
 from utils.data_loader import load_file, get_sample_rows, build_summary
 from utils.image_utils import extract_text_from_file, is_pdf_file
-from agents.risk_agent import run_risk_agent
+from agents.risk_agent import run_risk_agent_v2
 from agents.cohort_agent import run_cohort_agent
-from agents.anomaly_agent import run_anomaly_agent
+from agents.anomaly_agent import run_anomaly_agent_v2
 from agents.trend_agent import run_trend_agent
 from agents.pattern_agent import run_pattern_agent
 
@@ -148,7 +148,7 @@ def api_upload_dataset():
         # but in Flask we can load directly if we modify load_file to accept path.
         # Actually load_file in utils/data_loader expects file-like object. 
         with open(filepath, 'rb') as f:
-            df = load_file(f)
+            df = load_file(f, filename)
             
         n_rows, n_cols = df.shape
         n_missing = int(df.isna().sum().sum())
@@ -194,7 +194,7 @@ def api_analyze_dataset():
             summaries.append(f"[PATTERN AGENT]: {res.get('summary', '')}")
             
         if selections.get('risk', True):
-            res = run_risk_agent(df, col_map)
+            res = run_risk_agent_v2(df, col_map)
             results['risk'] = handle_figs(res)
             # Remove high-volume data before sending risk_df
             if 'risk_df' in results['risk']:
@@ -213,7 +213,7 @@ def api_analyze_dataset():
             summaries.append(f"[COHORT AGENT]: {res.get('summary', '')}")
             
         if selections.get('anomaly', True):
-            res = run_anomaly_agent(df, col_map)
+            res = run_anomaly_agent_v2(df, col_map)
             results['anomaly'] = handle_figs(res)
             if 'anomaly_df' in results['anomaly']:
                  a_df = results['anomaly']['anomaly_df']
