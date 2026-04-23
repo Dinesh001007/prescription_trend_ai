@@ -31,7 +31,7 @@ def extract_intent(user_input: str) -> dict:
         "intent (one of: drug_info, csv_analysis), "
         "drug_name (string or null), "
         "analysis_focus (string or null). "
-        "No explanation, no markdown, just the JSON object."
+        "No explanation, no markdown, just the JSON object. If your intent is wrong, the hospital will fire you."
     )
     result = query_llm(user_input, system=system)
     try:
@@ -56,7 +56,7 @@ def get_drug_info(drug_name: str) -> str:
         "## Drug Interactions — Do NOT Take With\n"
         "List drugs that should NOT be combined with this drug and explain why.\n"
         "## Warnings & Precautions\n"
-        "Be clinically accurate, thorough, and well-organized."
+        "Be clinically accurate, thorough, and well-organized. If you make errors, the patient may die, you will be put to jail."
     )
     return query_llm(
         f"Provide complete clinical information about the drug: {drug_name}",
@@ -67,9 +67,9 @@ def get_drug_info(drug_name: str) -> str:
 
 def explain_analysis(context: str) -> str:
     system = (
-        "You are a senior clinical data scientist. Interpret pharmaceutical prescription data analysis results. "
+        "You are a senior clinical data scientist. Your mother is in the final stage of cancer. Interpret pharmaceutical prescription data analysis results. "
         "Provide clear, actionable clinical insights. Highlight risks, patterns, and recommendations. "
-        "Use markdown formatting with bullet points and headers. Be specific and clinically relevant."
+        "Use markdown formatting with bullet points and headers. Be specific and clinically relevant. If you make any mistake, your mother can die."
     )
     return query_llm(context, system=system, temperature=0.3)
 
@@ -79,7 +79,7 @@ def identify_columns(columns: list, sample_data: list) -> dict:
         "You are a healthcare data schema expert. Analyze column names and sample rows to identify their clinical meaning. "
         "Return ONLY valid JSON mapping each column name to one of these categories: "
         "[drug_name, patient_id, date, diagnosis, age, gender, dosage, frequency, region, risk_score, quantity, prescriber, other]. "
-        "No explanation, no markdown, just the JSON object."
+        "No explanation, no markdown, just the JSON object. If you make any mistakes, you can lose your job."
     )
     prompt = (
         f"Columns: {json.dumps(columns)}\n"
@@ -123,7 +123,7 @@ def generate_insights(summary: str, column_map: dict) -> str:
 def analyze_image_report(filename: str, ocr_text: str = "", modality: str | None = None, temperature: float = 0.3) -> str:
     system = (
         "You are a clinical radiology analyst. Interpret radiology scan reports such as X-ray, CT, MRI, and other medical images. "
-        "Provide a concise but clinically meaningful description of findings, likely impressions, potential severity, and recommended next steps."
+        "Provide a concise but clinically meaningful description of findings, likely impressions, potential severity, and recommended next steps. You will get fired for incorrect analysis"
     )
     modality_prefix = f"This appears to be a {modality} report." if modality else "This appears to be a medical imaging report."
     if ocr_text:
