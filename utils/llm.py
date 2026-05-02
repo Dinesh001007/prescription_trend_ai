@@ -2,8 +2,8 @@ import requests
 import json
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-# MODEL = "phi4-mini"
-MODEL = "MedAIBase/MedGemma1.5:4b"
+MODEL = "phi4-mini"
+# MODEL = "MedAIBase/MedGemma1.5:4b"
 
 
 def query_llm(prompt: str, system: str = "", temperature: float = 0.3) -> str:

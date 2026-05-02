@@ -3,8 +3,10 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score
 import plotly.express as px
 import plotly.graph_objects as go
+import time
 
 
 def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
@@ -13,7 +15,8 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
     Works with any numeric/categorical columns available.
     Returns: risk scores, feature importances, visualizations.
     """
-    result = {"status": "ok", "figures": [], "summary": "", "risk_df": None}
+    start_time = time.perf_counter()
+    result = {"status": "ok", "figures": [], "summary": "", "risk_df": None, "metrics": {}}
 
     # Select usable columns
     feature_cols = []
@@ -73,6 +76,12 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         model = XGBClassifier(n_estimators=100, max_depth=4, random_state=42, eval_metric="logloss", verbosity=0)
         model.fit(X_train, y_train)
+
+        # Evaluate on test set
+        y_pred = model.predict(X_test)
+        acc = accuracy_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred, zero_division=0)
+        rec = recall_score(y_test, y_pred, zero_division=0)
 
         # Predict risk scores on full dataset
         risk_proba = model.predict_proba(X)[:, 1]
@@ -172,8 +181,20 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
             f"Model trained with XGBoost on {len(feature_cols)} features."
         )
 
+        # Performance metrics
+        duration = (time.perf_counter() - start_time) * 1000
+        result["metrics"] = {
+            "Accuracy": f"{acc*100:.1f}%",
+            "Precision": f"{prec*100:.1f}%",
+            "Recall": f"{rec*100:.1f}%",
+            "High Risk": f"{high_risk_count}",
+            "Execution": f"{duration:.1f}ms",
+            "Model": "XGBoost"
+        }
+
     except Exception as e:
         result["status"] = "error"
         result["summary"] = f"Risk agent error: {str(e)}"
 
     return result
+

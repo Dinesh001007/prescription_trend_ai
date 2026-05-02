@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import time
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -17,7 +19,8 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
     Trend Agent: Uses Prophet to forecast prescription trends over time.
     Falls back to rolling average trend if no date column found.
     """
-    result = {"status": "ok", "figures": [], "summary": ""}
+    start_time = time.perf_counter()
+    result = {"status": "ok", "figures": [], "summary": "", "metrics": {}}
 
     date_col = next((c for c, cat in col_map.items() if cat == "date" and c in df.columns), None)
     drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
@@ -98,6 +101,9 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
         overall_ts.columns = ["ds", "y"]
         overall_ts = overall_ts.dropna()
 
+        periods = 0
+        model_name = "Rolling Average"
+        rmse, mae = 0, 0
         if STATSMODELS_AVAILABLE and len(overall_ts) >= 10:
             try:
                 periods = {"D": 30, "W": 12, "MS": 6}.get(freq, 12)
@@ -106,12 +112,19 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
                 # Minimum data constraint for ETS
                 if len(overall_ts) >= 2 * seasonal_periods:
                     model = ExponentialSmoothing(overall_ts["y"], trend="add", seasonal="add", seasonal_periods=seasonal_periods)
+                    model_name = "Holt-Winters (S)"
                 else:
                     model = ExponentialSmoothing(overall_ts["y"], trend="add", seasonal=None)
+                    model_name = "Holt-Winters (T)"
                 
                 fit_model = model.fit(optimized=True)
                 forecast_vals = fit_model.forecast(periods)
                 
+                # Calculate fit metrics
+                fitted_vals = fit_model.fittedvalues
+                rmse = np.sqrt(mean_squared_error(overall_ts["y"], fitted_vals))
+                mae = mean_absolute_error(overall_ts["y"], fitted_vals)
+
                 # Build DS for forecast
                 last_date = overall_ts["ds"].iloc[-1]
                 if freq == "D":
@@ -164,11 +177,120 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
                 f"Prophet unavailable or insufficient data; showing rolling average trend."
             )
 
+        # Performance metrics
+        duration = (time.perf_counter() - start_time) * 1000
+        result["metrics"] = {
+            "RMSE": f"{rmse:.1f}",
+            "MAE": f"{mae:.1f}",
+            "Points": f"{len(overall_ts)}",
+            "Horizon": f"{periods}",
+            "Execution": f"{duration:.1f}ms",
+            "Model": model_name
+        }
+
     except Exception as e:
         result["status"] = "error"
         result["summary"] = f"Trend agent error: {str(e)}"
 
     return result
+
+
+def _plot_simple_trend(ts_df: pd.DataFrame, result: dict):
+    """Fallback rolling average trend plot."""
+    ts_df = ts_df.copy()
+    ts_df["rolling"] = ts_df["y"].rolling(window=min(3, len(ts_df)), min_periods=1).mean()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=ts_df["ds"], y=ts_df["y"],
+        mode="lines+markers", name="Actual",
+        line=dict(color="#00C9A7"), marker=dict(size=4),
+    ))
+    fig.add_trace(go.Scatter(
+        x=ts_df["ds"], y=ts_df["rolling"],
+        mode="lines", name="Rolling Avg",
+        line=dict(color="#FFC300", dash="dash"),
+    ))
+    fig.update_layout(
+        title="Prescription Volume Trend",
+        xaxis_title="Date", yaxis_title="Volume",
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#E8EAF0",
+    )
+    result["figures"].append(("Volume Trend", fig))
+
+
+def _add_static_trend(df: pd.DataFrame, col_map: dict, result: dict):
+    """Add frequency charts when no date column exists."""
+    drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
+    if drug_col:
+        counts = df[drug_col].value_counts().head(15)
+        fig = px.bar(
+            x=counts.index, y=counts.values,
+            title="Top Prescribed Drugs by Volume",
+            labels={"x": "Drug", "y": "Count"},
+            color=counts.values,
+            color_continuous_scale="Teal",
+            template="plotly_dark",
+        )
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#E8EAF0",
+            showlegend=False,
+        )
+        result["figures"].append(("Top Drugs by Volume", fig))
+
+
+
+def _plot_simple_trend(ts_df: pd.DataFrame, result: dict):
+    """Fallback rolling average trend plot."""
+    ts_df = ts_df.copy()
+    ts_df["rolling"] = ts_df["y"].rolling(window=min(3, len(ts_df)), min_periods=1).mean()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=ts_df["ds"], y=ts_df["y"],
+        mode="lines+markers", name="Actual",
+        line=dict(color="#00C9A7"), marker=dict(size=4),
+    ))
+    fig.add_trace(go.Scatter(
+        x=ts_df["ds"], y=ts_df["rolling"],
+        mode="lines", name="Rolling Avg",
+        line=dict(color="#FFC300", dash="dash"),
+    ))
+    fig.update_layout(
+        title="Prescription Volume Trend",
+        xaxis_title="Date", yaxis_title="Volume",
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#E8EAF0",
+    )
+    result["figures"].append(("Volume Trend", fig))
+
+
+def _add_static_trend(df: pd.DataFrame, col_map: dict, result: dict):
+    """Add frequency charts when no date column exists."""
+    drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
+    if drug_col:
+        counts = df[drug_col].value_counts().head(15)
+        fig = px.bar(
+            x=counts.index, y=counts.values,
+            title="Top Prescribed Drugs by Volume",
+            labels={"x": "Drug", "y": "Count"},
+            color=counts.values,
+            color_continuous_scale="Teal",
+            template="plotly_dark",
+        )
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#E8EAF0",
+            showlegend=False,
+        )
+        result["figures"].append(("Top Drugs by Volume", fig))
+
 
 
 def _plot_simple_trend(ts_df: pd.DataFrame, result: dict):

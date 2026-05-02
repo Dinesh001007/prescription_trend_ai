@@ -772,11 +772,19 @@ else:
                             elif res["status"] in ["insufficient_columns", "no_drug_col", "no_date"]:
                                 st.info(res["summary"])
                             else:
+                                # Metrics Row
+                                metrics = res.get("metrics", {})
+                                if metrics:
+                                    metric_html = '<div class="metric-row" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">'
+                                    for m_label, m_value in metrics.items():
+                                        metric_html += f'<div class="metric-card"><div class="metric-label">{m_label}</div><div class="metric-value" style="font-size: 18px;">{m_value}</div></div>'
+                                    metric_html += "</div>"
+                                    st.markdown(metric_html, unsafe_allow_html=True)
+
+
                                 # Summary
                                 if res.get("summary"):
-                                    cols = st.columns([2, 1])
-                                    with cols[0]:
-                                        st.markdown(f'<div class="insight-box" style="font-size:13px">{res["summary"]}</div>', unsafe_allow_html=True)
+                                    st.markdown(f'<div class="insight-box" style="font-size:13px">{res["summary"]}</div>', unsafe_allow_html=True)
 
                                 # Charts
                                 figs = res.get("figures", [])
@@ -786,6 +794,7 @@ else:
                                         for j, (title, fig) in enumerate(figs[i:i+2]):
                                             with chart_cols[j]:
                                                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
 
                 for tname in tab_names:
                     if tname == "📊 Patterns":
