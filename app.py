@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import sys
 import os
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -21,9 +22,9 @@ from utils.data_loader import (
     get_sample_rows,
     build_summary,
 )
-from agents.risk_agent import run_risk_agent
-from agents.cohort_agent import run_cohort_agent
-from agents.anomaly_agent import run_anomaly_agent
+from agents.risk_agent_advanced import run_risk_agent_advanced as run_risk_agent
+from agents.cohort_agent_advanced import run_cohort_agent_advanced as run_cohort_agent
+from agents.anomaly_agent_improved import run_anomaly_agent_improved as run_anomaly_agent
 from agents.trend_agent import run_trend_agent
 from agents.pattern_agent import run_pattern_agent
 from utils.image_utils import (
@@ -32,6 +33,12 @@ from utils.image_utils import (
     load_image_from_bytes,
     extract_text_from_file,
 )
+from utils.pdf_generator import (
+    generate_pdf_report,
+    create_visualizations_pdf,
+)
+from utils.schema_analyzer import SchemaAnalyzer, ColumnType
+from utils.intelligent_analyzer import IntelligentAnalyzer
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -604,6 +611,27 @@ else:
 
         col_map = st.session_state.col_map
 
+        # Intelligent data validation and analysis
+        with st.spinner("Performing intelligent data validation..."):
+            intelligent_analyzer = IntelligentAnalyzer()
+            schema_analyzer = SchemaAnalyzer()
+            
+            # Analyze data quality and types
+            validation_results = intelligent_analyzer.analyze_dataframe_intelligently(df)
+            
+            # Display data quality insights
+            if validation_results['summary_insights']:
+                st.markdown('<div class="section-header">🔍 Data Quality Insights</div>', unsafe_allow_html=True)
+                for insight in validation_results['summary_insights']:
+                    st.info(f"• {insight}")
+            
+            # Show validation errors if any
+            validation_errors = intelligent_analyzer.get_validation_errors()
+            if validation_errors:
+                st.warning("⚠️ Data Validation Warnings:")
+                for error in validation_errors:
+                    st.write(f"• {error}")
+
         # Display column mapping as pills
         cols_display = st.columns(min(4, len(df.columns)))
         color_map = {
@@ -619,6 +647,13 @@ else:
                 cls = "pill-red" if cat in ["risk_score"] else "pill"
                 html_pills += f'<span class="{cls}">{col} → {cat}</span> '
             st.markdown(f'<div style="line-height:2.2">{html_pills}</div>', unsafe_allow_html=True)
+            
+            # Show intelligent type detection results
+            st.markdown("**🧠 Intelligent Type Detection:**")
+            type_counts = validation_results['schema_overview']['type_distribution']
+            for col_name, col_type in validation_results['schema_overview']['column_types'].items():
+                if col_name in col_map:
+                    st.write(f"• {col_name}: `{col_type}` (LLM: `{col_map[col_name]}`)")
 
         # ── Override column roles (outside expander to avoid nesting) ──
         with st.expander("✏️ Override Column Roles"):
@@ -703,6 +738,123 @@ else:
         if st.session_state.analysis_done and hasattr(st.session_state, "analysis_results"):
             results = st.session_state.analysis_results
 
+            # Model Accuracy Summary
+            st.markdown('<div class="section-header">📊 Model Performance Summary</div>', unsafe_allow_html=True)
+            
+            # Collect all accuracy metrics
+            all_accuracy_metrics = []
+            for agent_key, res in results.items():
+                if res.get("status") == "ok" and res.get("metrics"):
+                    metrics = res.get("metrics", {})
+                    accuracy_data = {
+                        "agent": agent_key.title(),
+                        "model": metrics.get("Model", "Unknown"),
+                        "accuracy": None,
+                        "precision": None,
+                        "recall": None,
+                        "silhouette": None,
+                        "rmse": None,
+                        "mae": None,
+                        "confidence": None,
+                        "execution": metrics.get("Execution", "N/A")
+                    }
+                    
+                    for metric_name in ["accuracy", "precision", "recall", "silhouette", "rmse", "mae", "confidence"]:
+                        if metric_name.capitalize() in metrics:
+                            accuracy_data[metric_name] = metrics[metric_name.capitalize()]
+                    
+                    all_accuracy_metrics.append(accuracy_data)
+            
+            if all_accuracy_metrics:
+                # Create accuracy summary table
+                accuracy_df = pd.DataFrame(all_accuracy_metrics)
+                
+                # Display as styled table
+                st.markdown("""
+                <style>
+                .accuracy-table {
+                    background: #161A22;
+                    border: 1px solid #1E2330;
+                    border-radius: 14px;
+                    padding: 20px;
+                    margin-bottom: 20px;
+                }
+                .accuracy-table table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    color: #E8EAF0;
+                }
+                .accuracy-table th {
+                    background: #0D0F14;
+                    padding: 12px;
+                    text-align: left;
+                    font-weight: 600;
+                    color: #00C9A7;
+                    border-bottom: 2px solid #00C9A7;
+                }
+                .accuracy-table td {
+                    padding: 10px 12px;
+                    border-bottom: 1px solid #1E2330;
+                }
+                .accuracy-high { color: #00C9A7; font-weight: 600; }
+                .accuracy-medium { color: #FFC300; font-weight: 500; }
+                .accuracy-low { color: #FF6B6B; font-weight: 500; }
+                </style>
+                """, unsafe_allow_html=True)
+                
+                st.markdown('<div class="accuracy-table">', unsafe_allow_html=True)
+                
+                # Create HTML table
+                table_html = """
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Agent</th>
+                            <th>Accuracy</th>
+                            <th>Precision</th>
+                            <th>Recall</th>
+                            <th>Silhouette</th>
+                            <th>RMSE</th>
+                            <th>MAE</th>
+                            <th>Confidence</th>
+                            <th>Execution</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                """
+                
+                for row in accuracy_df.itertuples():
+                    # Determine accuracy class
+                    acc_class = "accuracy-high"
+                    if row.accuracy:
+                        acc_val = float(row.accuracy.rstrip('%')) if '%' in row.accuracy else float(row.accuracy)
+                        if acc_val >= 90:
+                            acc_class = "accuracy-high"
+                        elif acc_val >= 70:
+                            acc_class = "accuracy-medium"
+                        else:
+                            acc_class = "accuracy-low"
+                    
+                    table_html += f"""
+                    <tr>
+                        <td><strong>{row.model}</strong></td>
+                        <td>{row.agent}</td>
+                        <td class="{acc_class}">{row.accuracy or '—'}</td>
+                        <td>{row.precision or '—'}</td>
+                        <td>{row.recall or '—'}</td>
+                        <td>{row.silhouette or '—'}</td>
+                        <td>{row.rmse or '—'}</td>
+                        <td>{row.mae or '—'}</td>
+                        <td>{row.confidence or '—'}</td>
+                        <td>{row.execution}</td>
+                    </tr>
+                    """
+                
+                table_html += "</tbody></table>"
+                st.markdown(table_html, unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
             # LLM Insights
             st.markdown('<div class="section-header">🤖 Phi-4 mini Clinical Insights</div>', unsafe_allow_html=True)
             if hasattr(st.session_state, "llm_insights"):
@@ -772,14 +924,46 @@ else:
                             elif res["status"] in ["insufficient_columns", "no_drug_col", "no_date"]:
                                 st.info(res["summary"])
                             else:
-                                # Metrics Row
+                                # Metrics Row with Accuracy Highlight
                                 metrics = res.get("metrics", {})
                                 if metrics:
-                                    metric_html = '<div class="metric-row" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">'
+                                    # Separate accuracy-related metrics from others
+                                    accuracy_metrics = {}
+                                    other_metrics = {}
+                                    
                                     for m_label, m_value in metrics.items():
-                                        metric_html += f'<div class="metric-card"><div class="metric-label">{m_label}</div><div class="metric-value" style="font-size: 18px;">{m_value}</div></div>'
-                                    metric_html += "</div>"
-                                    st.markdown(metric_html, unsafe_allow_html=True)
+                                        if m_label.lower() in ["accuracy", "precision", "recall", "silhouette", "rmse", "mae", "confidence"]:
+                                            accuracy_metrics[m_label] = m_value
+                                        else:
+                                            other_metrics[m_label] = m_value
+                                    
+                                    # Display accuracy metrics prominently first
+                                    if accuracy_metrics:
+                                        st.markdown('<div style="margin-bottom: 16px;"><h4 style="color: #00C9A7; font-size: 14px; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 1px;">🎯 Model Performance Metrics</h4></div>', unsafe_allow_html=True)
+                                        accuracy_html = '<div class="metric-row" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 12px;">'
+                                        for m_label, m_value in accuracy_metrics.items():
+                                            # Add special styling for accuracy
+                                            if m_label.lower() == "accuracy":
+                                                accuracy_html += f'<div class="metric-card" style="border: 2px solid #00C9A7; box-shadow: 0 0 16px rgba(0,201,167,0.3);"><div class="metric-label" style="color: #00C9A7;">⭐ {m_label}</div><div class="metric-value" style="font-size: 20px; color: #00C9A7; font-weight: 800;">{m_value}</div></div>'
+                                            elif m_label.lower() in ["precision", "recall"]:
+                                                accuracy_html += f'<div class="metric-card" style="border: 1px solid #FFC300;"><div class="metric-label" style="color: #FFC300;">📊 {m_label}</div><div class="metric-value" style="font-size: 18px; color: #FFC300;">{m_value}</div></div>'
+                                            elif m_label.lower() == "silhouette":
+                                                accuracy_html += f'<div class="metric-card" style="border: 1px solid #007AFF;"><div class="metric-label" style="color: #007AFF;">🔷 {m_label}</div><div class="metric-value" style="font-size: 18px; color: #007AFF;">{m_value}</div></div>'
+                                            elif m_label.lower() in ["rmse", "mae"]:
+                                                accuracy_html += f'<div class="metric-card" style="border: 1px solid #FF6B6B;"><div class="metric-label" style="color: #FF6B6B;">📉 {m_label}</div><div class="metric-value" style="font-size: 18px; color: #FF6B6B;">{m_value}</div></div>'
+                                            else:
+                                                accuracy_html += f'<div class="metric-card"><div class="metric-label">{m_label}</div><div class="metric-value" style="font-size: 18px;">{m_value}</div></div>'
+                                        accuracy_html += "</div>"
+                                        st.markdown(accuracy_html, unsafe_allow_html=True)
+                                    
+                                    # Display other metrics
+                                    if other_metrics:
+                                        st.markdown('<div style="margin-bottom: 16px;"><h4 style="color: #5A6070; font-size: 14px; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 1px;">⚙️ Model Details</h4></div>', unsafe_allow_html=True)
+                                        other_html = '<div class="metric-row" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));">'
+                                        for m_label, m_value in other_metrics.items():
+                                            other_html += f'<div class="metric-card"><div class="metric-label">{m_label}</div><div class="metric-value" style="font-size: 16px;">{m_value}</div></div>'
+                                        other_html += "</div>"
+                                        st.markdown(other_html, unsafe_allow_html=True)
 
 
                                 # Summary
@@ -828,6 +1012,111 @@ else:
                                 "text/csv",
                             )
                     tab_idx += 1
+
+            # PDF Download Section
+            st.markdown("---")
+            st.markdown('<div class="section-header">📄 Download Analysis Report</div>', unsafe_allow_html=True)
+            
+            # Initialize session state for download buttons
+            if 'generate_full_report' not in st.session_state:
+                st.session_state.generate_full_report = False
+            if 'generate_visualizations' not in st.session_state:
+                st.session_state.generate_visualizations = False
+            if 'generate_complete_package' not in st.session_state:
+                st.session_state.generate_complete_package = False
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("📊 Download Full Report", use_container_width=True):
+                    st.session_state.generate_full_report = True
+                    st.session_state.generate_visualizations = False
+                    st.session_state.generate_complete_package = False
+                    st.rerun()
+                
+                if st.session_state.generate_full_report:
+                    with st.spinner("Generating comprehensive PDF report..."):
+                        try:
+                            llm_insights = getattr(st.session_state, 'llm_insights', None)
+                            pdf_bytes = generate_pdf_report(df, col_map, results, llm_insights)
+                            st.download_button(
+                                label="⬇ Full Analysis Report (PDF)",
+                                data=pdf_bytes,
+                                file_name=f"prescription_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                            st.session_state.generate_full_report = False
+                        except Exception as e:
+                            st.error(f"Error generating PDF report: {str(e)}")
+                            st.session_state.generate_full_report = False
+            
+            with col2:
+                if st.button("📈 Download Visualizations", use_container_width=True):
+                    st.session_state.generate_full_report = False
+                    st.session_state.generate_visualizations = True
+                    st.session_state.generate_complete_package = False
+                    st.rerun()
+                
+                if st.session_state.generate_visualizations:
+                    with st.spinner("Generating visualizations PDF..."):
+                        try:
+                            viz_pdf_bytes = create_visualizations_pdf(results)
+                            st.download_button(
+                                label="⬇ Visualizations Only (PDF)",
+                                data=viz_pdf_bytes,
+                                file_name=f"prescription_visualizations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                            st.session_state.generate_visualizations = False
+                        except Exception as e:
+                            st.error(f"Error generating visualizations PDF: {str(e)}")
+                            st.session_state.generate_visualizations = False
+            
+            with col3:
+                # Generate combined report (both text and visualizations)
+                if st.button("📋 Download Complete Package", use_container_width=True):
+                    st.session_state.generate_full_report = False
+                    st.session_state.generate_visualizations = False
+                    st.session_state.generate_complete_package = True
+                    st.rerun()
+                
+                if st.session_state.generate_complete_package:
+                    with st.spinner("Generating complete analysis package..."):
+                        try:
+                            from reportlab.lib.utils import ImageReader
+                            import zipfile
+                            import io
+                            
+                            # Create zip file
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                                # Add main report
+                                llm_insights = getattr(st.session_state, 'llm_insights', None)
+                                main_pdf = generate_pdf_report(df, col_map, results, llm_insights)
+                                zip_file.writestr(f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", main_pdf)
+                                
+                                # Add visualizations
+                                viz_pdf = create_visualizations_pdf(results)
+                                zip_file.writestr(f"visualizations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", viz_pdf)
+                                
+                                # Add CSV data
+                                csv_data = df.to_csv(index=False)
+                                zip_file.writestr(f"dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", csv_data)
+                            
+                            zip_buffer.seek(0)
+                            st.download_button(
+                                label="⬇ Complete Package (ZIP)",
+                                data=zip_buffer.getvalue(),
+                                file_name=f"prescription_complete_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+                            st.session_state.generate_complete_package = False
+                        except Exception as e:
+                            st.error(f"Error generating complete package: {str(e)}")
+                            st.session_state.generate_complete_package = False
 
             # Reset button
             st.markdown("---")

@@ -4,6 +4,11 @@ import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import time
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from utils.schema_analyzer import SchemaAnalyzer, ColumnType
+from utils.intelligent_analyzer import IntelligentAnalyzer
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -32,13 +37,43 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
         _add_static_trend(df, col_map, result)
         return result
 
+    # Initialize intelligent analyzer for better data processing
+    intelligent_analyzer = IntelligentAnalyzer()
+    schema_analyzer = SchemaAnalyzer()
+    
     try:
         df_trend = df.copy()
-        df_trend["__date"] = pd.to_datetime(df_trend[date_col], errors="coerce")
+        print("Trend Agent: Performing intelligent data preprocessing...")
+        
+        # Process date column with intelligent detection
+        if date_col:
+            date_type = schema_analyzer.detect_column_type(df_trend[date_col], date_col)
+            if date_type == ColumnType.DATETIME:
+                df_trend["__date"] = pd.to_datetime(df_trend[date_col], errors="coerce")
+                print(f"  {date_col}: DateTime -> Processed safely")
+            else:
+                print(f"  {date_col}: Not detected as datetime, attempting conversion...")
+                df_trend["__date"] = pd.to_datetime(df_trend[date_col], errors="coerce")
+        
         df_trend = df_trend.dropna(subset=["__date"])
         
+        # Process quantity column with intelligent detection
         if qty_col:
-            df_trend[qty_col] = pd.to_numeric(df_trend[qty_col], errors="coerce").fillna(0)
+            qty_type = schema_analyzer.detect_column_type(df_trend[qty_col], qty_col)
+            if qty_type == ColumnType.NUMERICAL:
+                df_trend[qty_col] = pd.to_numeric(df_trend[qty_col], errors="coerce").fillna(0)
+                print(f"  {qty_col}: Numerical -> Processed safely")
+            else:
+                print(f"  {qty_col}: Not detected as numerical, attempting conversion...")
+                df_trend[qty_col] = pd.to_numeric(df_trend[qty_col], errors="coerce").fillna(0)
+        
+        # Process drug column with intelligent detection
+        if drug_col:
+            drug_type = schema_analyzer.detect_column_type(df_trend[drug_col], drug_col)
+            if drug_type == ColumnType.CATEGORICAL:
+                print(f"  {drug_col}: Categorical -> Processed safely")
+            else:
+                print(f"  {drug_col}: Not detected as categorical, using as-is")
 
         if len(df_trend) < 5:
             result["status"] = "insufficient_data"

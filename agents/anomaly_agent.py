@@ -8,32 +8,47 @@ from sklearn.metrics import silhouette_score
 import plotly.express as px
 import plotly.graph_objects as go
 import time
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from utils.schema_analyzer import SchemaAnalyzer, ColumnType
+from utils.intelligent_analyzer import IntelligentAnalyzer
 
 
 class AnomalyAE(nn.Module):
     def __init__(self, input_dim):
         super(AnomalyAE, self).__init__()
-        # Encoder
+        # Improved encoder with batch normalization
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 32),
+            nn.Linear(input_dim, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.Linear(32, 16),
+            nn.Dropout(0.1),
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
-            nn.Linear(16, 8), # Latent space
+            nn.Dropout(0.1),
+            nn.Linear(32, 16), # Latent space
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
         )
-        # Decoder
+        # Improved decoder
         self.decoder = nn.Sequential(
-            nn.Linear(8, 16),
-            nn.ReLU(),
             nn.Linear(16, 32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
-            nn.Linear(32, input_dim),
+            nn.Dropout(0.1),
+            nn.Linear(32, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(64, input_dim),
         )
 
     def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
 
 
 def run_anomaly_agent(df: pd.DataFrame, col_map: dict) -> dict:
@@ -53,13 +68,45 @@ def run_anomaly_agent(df: pd.DataFrame, col_map: dict) -> dict:
         result["summary"] = "Not enough columns for deep anomaly detection."
         return result
 
+    # Initialize intelligent analyzer for better preprocessing
+    intelligent_analyzer = IntelligentAnalyzer()
+    schema_analyzer = SchemaAnalyzer()
+    
     X = df[feature_cols].copy()
+    print("Anomaly Agent: Performing intelligent data preprocessing...")
+    
+    # Process each column based on its detected type
     for col in X.columns:
-        if X[col].dtype == object or str(X[col].dtype) == "category":
-            le = LabelEncoder()
-            X[col] = le.fit_transform(X[col].astype(str).fillna("unknown"))
+        detected_type = schema_analyzer.detect_column_type(X[col], col)
+        
+        if detected_type == ColumnType.CATEGORICAL:
+            # Use label encoding for categorical features in anomaly detection
+            try:
+                le = LabelEncoder()
+                X[col] = le.fit_transform(X[col].astype(str).fillna("unknown"))
+                print(f"  {col}: Categorical -> Label Encoded")
+            except Exception as e:
+                print(f"  {col}: Error processing categorical - {e}")
+                X[col] = 0  # Fallback
+                
+        elif detected_type == ColumnType.NUMERICAL:
+            # Safe numerical processing
+            try:
+                X[col] = pd.to_numeric(X[col], errors="coerce").fillna(0)
+                print(f"  {col}: Numerical -> Processed safely")
+            except Exception as e:
+                print(f"  {col}: Error processing numerical - {e}")
+                X[col] = 0  # Fallback
+                
+        elif detected_type == ColumnType.BOOLEAN:
+            # Convert boolean to numeric
+            X[col] = X[col].astype(str).map({'True': 1, 'true': 1, '1': 1, 'False': 0, 'false': 0, '0': 0}).fillna(0)
+            print(f"  {col}: Boolean -> Numeric")
+            
         else:
+            # Fallback for unknown types
             X[col] = pd.to_numeric(X[col], errors="coerce").fillna(0)
+            print(f"  {col}: Unknown -> Fallback processing")
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -176,4 +223,4 @@ def run_anomaly_agent(df: pd.DataFrame, col_map: dict) -> dict:
         result["summary"] = f"Anomaly agent error: {str(e)}"
 
     return result
-
+

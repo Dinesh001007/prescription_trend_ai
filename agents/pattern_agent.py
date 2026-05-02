@@ -5,6 +5,11 @@ import plotly.express as px
 from itertools import combinations
 from collections import Counter
 import time
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from utils.schema_analyzer import SchemaAnalyzer, ColumnType
+from utils.intelligent_analyzer import IntelligentAnalyzer
 
 
 def run_pattern_agent(df: pd.DataFrame, col_map: dict) -> dict:
@@ -15,6 +20,10 @@ def run_pattern_agent(df: pd.DataFrame, col_map: dict) -> dict:
     start_time = time.perf_counter()
     result = {"status": "ok", "figures": [], "summary": "", "metrics": {}}
 
+    # Initialize intelligent analyzer for better data processing
+    intelligent_analyzer = IntelligentAnalyzer()
+    schema_analyzer = SchemaAnalyzer()
+    
     drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
     patient_col = next((c for c, cat in col_map.items() if cat == "patient_id" and c in df.columns), None)
 
@@ -22,6 +31,15 @@ def run_pattern_agent(df: pd.DataFrame, col_map: dict) -> dict:
         result["status"] = "no_drug_col"
         result["summary"] = "No drug name column found. Cannot perform co-prescription pattern mining."
         return result
+
+    # Validate drug column type
+    print("Pattern Agent: Performing intelligent data validation...")
+    if drug_col:
+        drug_type = schema_analyzer.detect_column_type(df[drug_col], drug_col)
+        if drug_type != ColumnType.CATEGORICAL:
+            print(f"  {drug_col}: Not detected as categorical ({drug_type.value}), but proceeding...")
+        else:
+            print(f"  {drug_col}: Categorical -> Valid for pattern analysis")
 
     try:
         # Top drugs overall
@@ -178,4 +196,4 @@ def run_pattern_agent(df: pd.DataFrame, col_map: dict) -> dict:
         result["summary"] = f"Pattern agent error: {str(e)}"
 
     return result
-
+

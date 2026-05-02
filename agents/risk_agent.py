@@ -9,25 +9,45 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score
 import plotly.express as px
 import plotly.graph_objects as go
 import time
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from utils.schema_analyzer import SchemaAnalyzer, ColumnType
+from utils.intelligent_analyzer import IntelligentAnalyzer
 
 
 class RiskMLP(nn.Module):
     def __init__(self, input_dim):
         super(RiskMLP, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 16),
-            nn.ReLU(),
-            nn.Linear(16, 1),
-            nn.Sigmoid()
-        )
+        # Improved architecture with batch normalization
+        self.layers = nn.ModuleList()
+        
+        # Input layer
+        self.layers.append(nn.Linear(input_dim, 128))
+        self.layers.append(nn.BatchNorm1d(128))
+        self.layers.append(nn.ReLU())
+        self.layers.append(nn.Dropout(0.3))
+        
+        # Hidden layers
+        self.layers.append(nn.Linear(128, 64))
+        self.layers.append(nn.BatchNorm1d(64))
+        self.layers.append(nn.ReLU())
+        self.layers.append(nn.Dropout(0.2))
+        
+        self.layers.append(nn.Linear(64, 32))
+        self.layers.append(nn.BatchNorm1d(32))
+        self.layers.append(nn.ReLU())
+        self.layers.append(nn.Dropout(0.1))
+        
+        # Output layer
+        self.layers.append(nn.Linear(32, 1))
+        
+        self.net = nn.Sequential(*self.layers)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        return self.net(x)
+        logits = self.net(x)
+        return self.sigmoid(logits)
 
 
 def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
@@ -52,14 +72,48 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
         result["summary"] = "Not enough feature columns for risk analysis."
         return result
 
-    # Preprocessing
+    # Initialize intelligent analyzer for better preprocessing
+    intelligent_analyzer = IntelligentAnalyzer()
+    schema_analyzer = SchemaAnalyzer()
+    
+    # Preprocessing with intelligent type detection
     X = df[feature_cols].copy()
+    print("Risk Agent: Performing intelligent data preprocessing...")
+    
+    # Process each column based on its detected type
     for col in X.columns:
-        if X[col].dtype == object or str(X[col].dtype) == "category":
-            le = LabelEncoder()
-            X[col] = le.fit_transform(X[col].astype(str).fillna("unknown"))
+        detected_type = schema_analyzer.detect_column_type(X[col], col)
+        
+        if detected_type == ColumnType.CATEGORICAL:
+            # Use one-hot encoding for categorical features
+            try:
+                # For categorical features, use label encoding for now (can be upgraded to one-hot)
+                le = LabelEncoder()
+                X[col] = le.fit_transform(X[col].astype(str).fillna("unknown"))
+                print(f"  {col}: Categorical -> Label Encoded")
+            except Exception as e:
+                print(f"  {col}: Error processing categorical - {e}")
+                X[col] = 0  # Fallback
+                
+        elif detected_type == ColumnType.NUMERICAL:
+            # Safe numerical processing
+            try:
+                X[col] = intelligent_analyzer.safe_median(X[col], col)
+                X[col] = pd.to_numeric(X[col], errors="coerce").fillna(X[col].median() if X[col].notna().any() else 0)
+                print(f"  {col}: Numerical -> Processed safely")
+            except Exception as e:
+                print(f"  {col}: Error processing numerical - {e}")
+                X[col] = 0  # Fallback
+                
+        elif detected_type == ColumnType.BOOLEAN:
+            # Convert boolean to numeric
+            X[col] = X[col].astype(str).map({'True': 1, 'true': 1, '1': 1, 'False': 0, 'false': 0, '0': 0}).fillna(0)
+            print(f"  {col}: Boolean -> Numeric")
+            
         else:
-            X[col] = pd.to_numeric(X[col], errors="coerce").fillna(X[col].median() if X[col].notna().any() else 0)
+            # Fallback for unknown types
+            X[col] = pd.to_numeric(X[col], errors="coerce").fillna(0)
+            print(f"  {col}: Unknown -> Fallback processing")
 
     # Scaling is crucial for Deep Learning
     scaler = StandardScaler()
@@ -71,9 +125,45 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
             result["status"] = "no_numeric"
             result["summary"] = "No numeric columns found for risk scoring."
             return result
-        z_scores = (numeric_X - numeric_X.mean()) / (numeric_X.std() + 1e-9)
-        combined_score = z_scores.abs().mean(axis=1)
-        y = (combined_score > combined_score.quantile(0.80)).astype(int).values
+        
+        # Create more meaningful synthetic risk score based on clinical patterns
+        risk_features = []
+        feature_weights = []
+        
+        for col in numeric_X.columns:
+            col_data = numeric_X[col].dropna()
+            if len(col_data) > 0:
+                # Check for potential risk indicators
+                if 'dosage' in col.lower() or 'quantity' in col.lower():
+                    # High dosage might indicate risk
+                    risk_score = (col_data - col_data.mean()) / (col_data.std() + 1e-9)
+                    risk_features.append(risk_score.abs())
+                    feature_weights.append(1.5)  # Higher weight for dosage
+                elif 'age' in col.lower():
+                    # Age-based risk
+                    age_risk = (col_data - col_data.mean()) / (col_data.std() + 1e-9)
+                    risk_features.append(age_risk.abs())
+                    feature_weights.append(1.2)
+                else:
+                    # Other numeric features
+                    z_score = (col_data - col_data.mean()) / (col_data.std() + 1e-9)
+                    risk_features.append(z_score.abs())
+                    feature_weights.append(1.0)
+        
+        if risk_features:
+            # Weighted combination of risk features
+            weighted_scores = []
+            for i, feature in enumerate(risk_features):
+                weighted_scores.append(feature * feature_weights[i])
+            
+            combined_score = sum(weighted_scores) / sum(feature_weights)
+            # Use more reasonable threshold (70th percentile instead of 80th)
+            y = (combined_score > combined_score.quantile(0.70)).astype(int).values
+        else:
+            # Fallback to simple approach
+            z_scores = (numeric_X - numeric_X.mean()) / (numeric_X.std() + 1e-9)
+            combined_score = z_scores.abs().mean(axis=1)
+            y = (combined_score > combined_score.quantile(0.70)).astype(int).values
     else:
         raw_target = df[target_col].copy()
         if raw_target.dtype == object:
@@ -96,17 +186,40 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
     # Initialize Model
     model = RiskMLP(X_train.shape[1])
     criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.005)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)  # Lower LR with weight decay
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=10, factor=0.5)
 
-    # Training Loop
+    # Training Loop with early stopping
     model.train()
-    epochs = 50
+    epochs = 100
+    best_loss = float('inf')
+    patience = 15
+    patience_counter = 0
+    
     for epoch in range(epochs):
         optimizer.zero_grad()
         outputs = model(X_train_t)
         loss = criterion(outputs, y_train_t)
         loss.backward()
         optimizer.step()
+        
+        # Learning rate scheduling
+        scheduler.step(loss)
+        
+        # Early stopping
+        if loss < best_loss:
+            best_loss = loss
+            patience_counter = 0
+            # Save best model state
+            best_model_state = model.state_dict().copy()
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                break  # Early stopping
+    
+    # Load best model
+    if 'best_model_state' in locals():
+        model.load_state_dict(best_model_state)
 
     # Evaluation
     model.eval()
@@ -181,4 +294,4 @@ def run_risk_agent(df: pd.DataFrame, col_map: dict) -> dict:
     }
 
     return result
-
+

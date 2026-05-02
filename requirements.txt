@@ -12,3 +12,6 @@ openpyxl==3.1.4
 Pillow==10.0.0
 pytesseract==0.3.11
 PyMuPDF==1.25.0
+reportlab==4.0.7
+matplotlib==3.8.4
+seaborn==0.13.2
