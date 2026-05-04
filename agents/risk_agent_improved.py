@@ -39,7 +39,7 @@ class HealthcareRiskPredictor:
         """
         Create meaningful healthcare-specific features for risk prediction.
         """
-        print("🏥 Creating healthcare-specific features...")
+        print("Creating healthcare-specific features")
         features = df.copy()
         
         # 1. Patient-level prescription features
@@ -128,62 +128,69 @@ class HealthcareRiskPredictor:
         for col in categorical_cols:
             if col in features.columns:
                 le = LabelEncoder()
-                features[f"{col}_encoded"] = le.fit_transform(features[col].astype(str).fillna("unknown"))
+                features[f"{col}_encoded"] = le.fit_transform(features[col].fillna("unknown").astype(str))
                 self.label_encoders[col] = le
                 
-        print(f"✅ Created {len(features.columns)} healthcare features")
+        print(f"Created {len(features.columns)} healthcare features")
         return features
     
     def apply_clinical_reasoning_rules(self, df: pd.DataFrame, col_map: dict) -> pd.DataFrame:
         """
         Apply domain knowledge rules to simulate clinical reasoning.
         """
-        print("🧠 Applying clinical reasoning rules...")
+        print("Applying clinical reasoning rules")
         features = df.copy()
         
-        # Rule 1: Polypharmacy risk
-        if 'polypharmacy_flag' in features.columns:
-            features['polypharmacy_risk'] = features['polypharmacy_flag'] * 0.3
+        try:
+            # Rule 1: Polypharmacy risk
+            if 'polypharmacy_flag' in features.columns:
+                features['polypharmacy_risk'] = features['polypharmacy_flag'] * 0.3
+                
+            # Rule 2: High frequency risk
+            if 'high_frequency_flag' in features.columns:
+                features['frequency_risk'] = features['high_frequency_flag'] * 0.25
+                
+            # Rule 3: Elderly + multiple drugs risk
+            if 'elderly_flag' in features.columns and 'unique_drug_count' in features.columns:
+                features['elderly_polypharmacy_risk'] = (
+                    (features['elderly_flag'] == 1) & (features['unique_drug_count'] > 2)
+                ).astype(int) * 0.35
+                
+            # Rule 4: High dosage risk
+            if 'high_dosage_flag' in features.columns:
+                features['dosage_risk'] = features['high_dosage_flag'] * 0.2
+                
+            # Rule 5: Age-based risk
+            if 'age_risk_group' in features.columns:
+                age_risk_mapping = {'Low': 0.1, 'Low-Medium': 0.15, 'Medium': 0.2, 'Medium-High': 0.25, 'High': 0.3}
+                features['age_based_risk'] = features['age_risk_group'].map(age_risk_mapping).fillna(0.1)
+                
+            # Rule 6: Frequency-based risk
+            if 'prescriptions_per_month' in features.columns:
+                features['frequency_based_risk'] = np.clip(features['prescriptions_per_month'] / 10, 0, 0.3)
+                
+            # Combine all rule-based risks
+            risk_columns = [col for col in features.columns if col.endswith('_risk')]
+            if risk_columns:
+                features['clinical_risk_score'] = features[risk_columns].sum(axis=1)
+                features['clinical_risk_score'] = np.clip(features['clinical_risk_score'], 0, 1)
+            else:
+                features['clinical_risk_score'] = 0.1  # Default low risk
+                
+            print("Clinical reasoning rules applied")
+        except Exception as e:
+            print(f"Error in clinical reasoning rules: {e}")
+            import traceback
+            traceback.print_exc()
+            features['clinical_risk_score'] = 0.1  # Default low risk on error
             
-        # Rule 2: High frequency risk
-        if 'high_frequency_flag' in features.columns:
-            features['frequency_risk'] = features['high_frequency_flag'] * 0.25
-            
-        # Rule 3: Elderly + multiple drugs risk
-        if 'elderly_flag' in features.columns and 'unique_drug_count' in features.columns:
-            features['elderly_polypharmacy_risk'] = (
-                (features['elderly_flag'] == 1) & (features['unique_drug_count'] > 2)
-            ).astype(int) * 0.35
-            
-        # Rule 4: High dosage risk
-        if 'high_dosage_flag' in features.columns:
-            features['dosage_risk'] = features['high_dosage_flag'] * 0.2
-            
-        # Rule 5: Age-based risk
-        if 'age_risk_group' in features.columns:
-            age_risk_mapping = {'Low': 0.1, 'Low-Medium': 0.15, 'Medium': 0.2, 'Medium-High': 0.25, 'High': 0.3}
-            features['age_based_risk'] = features['age_risk_group'].map(age_risk_mapping).fillna(0.1)
-            
-        # Rule 6: Frequency-based risk
-        if 'prescriptions_per_month' in features.columns:
-            features['frequency_based_risk'] = np.clip(features['prescriptions_per_month'] / 10, 0, 0.3)
-            
-        # Combine all rule-based risks
-        risk_columns = [col for col in features.columns if col.endswith('_risk')]
-        if risk_columns:
-            features['clinical_risk_score'] = features[risk_columns].sum(axis=1)
-            features['clinical_risk_score'] = np.clip(features['clinical_risk_score'], 0, 1)
-        else:
-            features['clinical_risk_score'] = 0.1  # Default low risk
-            
-        print("✅ Clinical reasoning rules applied")
         return features
     
     def prepare_features(self, df: pd.DataFrame, col_map: dict) -> tuple:
         """
         Prepare features for model training with intelligent type detection.
         """
-        print("🔧 Preparing features with intelligent preprocessing...")
+        print("Preparing features with intelligent preprocessing...")
         
         # Create healthcare features
         engineered_df = self.create_healthcare_features(df, col_map)
@@ -236,20 +243,20 @@ class HealthcareRiskPredictor:
                 if pd.api.types.is_numeric_dtype(features_df[col]):
                     median_val = features_df[col].median()
                     features_df[col] = features_df[col].fillna(median_val)
-                    print(f"  Filled NaN in {col} with median: {median_val}")
+                    print(f"  Filled NaN in {col} with median: {str(median_val)}")
                 else:
                     mode_val = features_df[col].mode().iloc[0] if not features_df[col].mode().empty else 0
                     features_df[col] = features_df[col].fillna(mode_val)
-                    print(f"  Filled NaN in {col} with mode: {mode_val}")
+                    print(f"  Filled NaN in {col} with mode: {str(mode_val)}")
                 
-        print(f"✅ Selected {len(feature_cols)} features for modeling")
+        print(f"Selected {len(feature_cols)} features for modeling")
         return features_df, feature_cols
     
     def handle_class_imbalance(self, X, y):
         """
         Handle class imbalance using class weights.
         """
-        print("⚖️ Handling class imbalance...")
+        print("Handling class imbalance")
         
         # Check class distribution
         class_counts = np.bincount(y)
@@ -260,7 +267,7 @@ class HealthcareRiskPredictor:
         # Calculate class weights
         class_weights = compute_class_weight('balanced', classes=np.unique(y), y=y)
         weight_dict = dict(enumerate(class_weights))
-        print(f"✅ Using class weights: {weight_dict}")
+        print(f"Using class weights: {weight_dict}")
         
         return X, y, weight_dict
     
@@ -268,7 +275,7 @@ class HealthcareRiskPredictor:
         """
         Find optimal threshold prioritizing recall for healthcare safety.
         """
-        print("🎯 Optimizing prediction threshold...")
+        print("Optimizing prediction threshold")
         
         precision, recall, thresholds = precision_recall_curve(y_true, y_proba)
         f1_scores = 2 * (precision * recall) / (precision + recall + 1e-8)
@@ -281,7 +288,7 @@ class HealthcareRiskPredictor:
         optimal_idx = np.argmax(combined_scores)
         optimal_threshold = thresholds[optimal_idx]
         
-        print(f"✅ Optimal threshold: {optimal_threshold:.3f}")
+        print(f"Optimal threshold: {optimal_threshold:.3f}")
         print(f"   Recall: {recall[optimal_idx]:.3f}, Precision: {precision[optimal_idx]:.3f}")
         
         return optimal_threshold
@@ -290,7 +297,7 @@ class HealthcareRiskPredictor:
         """
         Train XGBoost or RandomForest with proper hyperparameters.
         """
-        print(f"🚀 Training {model_type.upper()} model...")
+        print(f"Training {model_type.upper()} model")
         
         # Handle class imbalance
         X_resampled, y_resampled, class_weights = self.handle_class_imbalance(X, y)
@@ -343,14 +350,14 @@ class HealthcareRiskPredictor:
         # Store feature names
         self.feature_names = X.columns.tolist()
         
-        print("✅ Model training completed")
+        print("Model training completed")
         return X_train_scaled, X_test_scaled, y_train, y_test
     
     def evaluate_model(self, X_test, y_test):
         """
         Comprehensive model evaluation with healthcare metrics.
         """
-        print("📊 Evaluating model performance...")
+        print("Evaluating model performance")
         
         # Predictions with optimal threshold
         y_proba = self.model.predict_proba(X_test)[:, 1]
@@ -372,7 +379,7 @@ class HealthcareRiskPredictor:
         # Classification report
         report = classification_report(y_test, y_pred, output_dict=True)
         
-        print(f"📈 Model Performance:")
+        print(f"Model Performance:")
         print(f"   Accuracy: {metrics['accuracy']:.3f}")
         print(f"   Precision: {metrics['precision']:.3f}")
         print(f"   Recall: {metrics['recall']:.3f}")
@@ -382,9 +389,9 @@ class HealthcareRiskPredictor:
         
         # Healthcare safety check
         if metrics['recall'] < 0.75:
-            print("⚠️ WARNING: Recall below 75% - may miss high-risk patients!")
+            print("WARNING: Recall below 75% - may miss high-risk patients!")
         else:
-            print("✅ Recall meets healthcare safety standards (>75%)")
+            print("Recall meets healthcare safety standards (>75%)")
             
         return metrics, cm, report, y_proba
     
@@ -398,7 +405,7 @@ class HealthcareRiskPredictor:
                 'importance': self.model.feature_importances_
             }).sort_values('importance', ascending=False)
             
-            print("🔍 Top 10 Most Important Features:")
+            print("Top 10 Most Important Features:")
             for _, row in importance_df.head(10).iterrows():
                 print(f"   {row['feature']}: {row['importance']:.4f}")
                 
@@ -489,7 +496,7 @@ def run_risk_agent_improved(df: pd.DataFrame, col_map: dict) -> dict:
         
         if True:  # Always create synthetic target for realistic evaluation
             # Create synthetic target for demonstration using raw data (before feature engineering)
-            print("⚠️ No risk_score column found, creating synthetic target for demonstration")
+            print("Warning: No risk_score column found, creating synthetic target for demonstration")
             np.random.seed(42)
             
             # Use raw data for synthetic target creation to avoid leakage
@@ -566,7 +573,7 @@ def run_risk_agent_improved(df: pd.DataFrame, col_map: dict) -> dict:
         metrics, cm, report, y_proba = predictor.evaluate_model(X_test, y_test)
         
         # Add cross-validation for more realistic evaluation
-        print("🔄 Performing cross-validation for realistic evaluation...")
+        print("Performing cross-validation for realistic evaluation")
         from sklearn.model_selection import cross_val_score, StratifiedKFold
         
         # Use the trained model's pipeline for cross-validation
@@ -617,7 +624,7 @@ def run_risk_agent_improved(df: pd.DataFrame, col_map: dict) -> dict:
 - 🔍 Feature importance explainability
 
 **Top Risk Factors:**
-{chr(10).join([f"• {row['feature']}: {row['importance']:.3f}" for _, row in feature_importance.head(5).iterrows()]) if feature_importance is not None else "• Feature importance not available"}
+{chr(10).join([f"• {str(row['feature'])}: {float(row['importance']):.3f}" for _, row in feature_importance.head(5).iterrows()]) if feature_importance is not None else "• Feature importance not available"}
 
 **Healthcare Safety:**
 - {'✅ PASS' if metrics['recall'] >= 0.75 else '⚠️ WARNING'}: Recall {metrics['recall']:.1%} {'meets' if metrics['recall'] >= 0.75 else 'below'} healthcare safety standard (75%)
@@ -644,13 +651,13 @@ def run_risk_agent_improved(df: pd.DataFrame, col_map: dict) -> dict:
             "Execution": f"{(time.perf_counter() - start_time)*1000:.1f}ms"
         }
 
-        print("\n Risk prediction completed successfully!")
-        print(f" {summary}")
+        print("\nRisk prediction completed successfully!")
+        print(f"{summary}")
 
     except Exception as e:
         result["status"] = "error"
         result["summary"] = f"Improved risk agent error: {str(e)}"
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         
     return result
 
@@ -688,11 +695,11 @@ if __name__ == "__main__":
     results = run_risk_agent_improved(df, col_map)
     
     if results["status"] == "ok":
-        print("\n✅ Analysis completed successfully!")
-        print(f"📊 {results['summary']}")
+        print("\nAnalysis completed successfully!")
+        print(f"{results['summary']}")
         
-        print("\n📈 Performance Metrics:")
+        print("\nPerformance Metrics:")
         for metric, value in results["metrics"].items():
             print(f"  {metric}: {value}")
     else:
-        print(f"❌ Analysis failed: {results['summary']}")
+        print(f"Analysis failed: {results['summary']}")

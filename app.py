@@ -22,7 +22,7 @@ from utils.data_loader import (
     get_sample_rows,
     build_summary,
 )
-from agents.risk_agent_advanced import run_risk_agent_advanced as run_risk_agent
+from agents.risk_agent_improved import run_risk_agent_improved as run_risk_agent
 from agents.cohort_agent_advanced import run_cohort_agent_advanced as run_cohort_agent
 from agents.anomaly_agent_improved import run_anomaly_agent_improved as run_anomaly_agent
 from agents.trend_agent import run_trend_agent

@@ -143,18 +143,21 @@ class SchemaAnalyzer:
     
     def _is_boolean_column(self, series: pd.Series, column_name: str) -> bool:
         """Check if column contains boolean data."""
+    
         # Check column name patterns
         name_lower = column_name.lower()
         if any(keyword in name_lower for keyword in self.healthcare_patterns['boolean_keywords']):
             return True
         
-        # Check unique values (should be 2 or less)
-        unique_values = series.astype(str).str.lower().unique()
-        if len(unique_values) <= 2:
-            # Check if values are boolean-like
-            bool_patterns = {'true', 'false', 'yes', 'no', 'y', 'n', '1', '0', 't', 'f'}
-            if all(val in bool_patterns for val in unique_values):
-                return True
+        # Normalize values
+        unique_values = set(series.astype(str).str.strip().str.lower().unique())
+        
+        # Strict boolean patterns only
+        bool_patterns = {'true', 'false', 'yes', 'no', 'y', 'n', '1', '0', 't', 'f'}
+        
+        # ✅ FIX: require ALL values to be valid boolean patterns
+        if len(unique_values) <= 2 and unique_values.issubset(bool_patterns):
+            return True
         
         # Check pandas dtype
         if series.dtype == 'bool':

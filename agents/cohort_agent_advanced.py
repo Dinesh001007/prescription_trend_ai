@@ -58,7 +58,7 @@ class AdvancedCohortAnalyzer:
         """
         Create comprehensive healthcare features with advanced engineering.
         """
-        print("🔬 Creating advanced healthcare features...")
+        print("Creating advanced healthcare features...")
         features = df.copy()
         
         # 1. Patient-level aggregations
@@ -938,9 +938,21 @@ def run_cohort_agent_advanced(df: pd.DataFrame, col_map: dict) -> dict:
             result["summary"] = f"Not enough numerical features for advanced clustering. Only {len(numerical_features)} features found."
             return result
         
-        print(f"✅ Found {len(numerical_features)} numerical features for clustering")
+        print(f"Found {len(numerical_features)} numerical features for clustering")
         
         X_features = engineered_df[numerical_features].copy()
+        
+        # Ensure all features are numeric: encode any residual categorical columns
+        for col in X_features.columns:
+            if not pd.api.types.is_numeric_dtype(X_features[col]):
+                try:
+                    X_features[col], _ = pd.factorize(X_features[col])
+                except Exception as e:
+                    print(f"Dropping non-numeric column {col}: {e}")
+                    X_features.drop(columns=[col], inplace=True)
+        
+        # Convert all columns to numeric where possible
+        X_features = X_features.apply(pd.to_numeric, errors='coerce')
         
         # 3. Handle missing values
         X_features = X_features.fillna(X_features.median())
