@@ -223,6 +223,21 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
             "Model": model_name
         }
 
+        # Store full trend results for CSV download
+        try:
+            if 'overall_ts' in locals() and overall_ts is not None:
+                trend_results_df = overall_ts.copy()
+                trend_results_df['type'] = 'actual'
+                
+                if 'forecast_vals' in locals() and forecast_vals is not None:
+                    future_df = pd.DataFrame({'ds': future_ds, 'y': forecast_vals})
+                    future_df['type'] = 'forecast'
+                    trend_results_df = pd.concat([trend_results_df, future_df], ignore_index=True)
+                
+                result["trend_df"] = trend_results_df
+        except Exception as e:
+            print(f"Warning: Could not generate trend DF: {e}")
+
     except Exception as e:
         result["status"] = "error"
         result["summary"] = f"Trend agent error: {str(e)}"
@@ -275,102 +290,4 @@ def _add_static_trend(df: pd.DataFrame, col_map: dict, result: dict):
             font_color="#E8EAF0",
             showlegend=False,
         )
-        result["figures"].append(("Top Drugs by Volume", fig))
-
-
-
-def _plot_simple_trend(ts_df: pd.DataFrame, result: dict):
-    """Fallback rolling average trend plot."""
-    ts_df = ts_df.copy()
-    ts_df["rolling"] = ts_df["y"].rolling(window=min(3, len(ts_df)), min_periods=1).mean()
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=ts_df["ds"], y=ts_df["y"],
-        mode="lines+markers", name="Actual",
-        line=dict(color="#00C9A7"), marker=dict(size=4),
-    ))
-    fig.add_trace(go.Scatter(
-        x=ts_df["ds"], y=ts_df["rolling"],
-        mode="lines", name="Rolling Avg",
-        line=dict(color="#FFC300", dash="dash"),
-    ))
-    fig.update_layout(
-        title="Prescription Volume Trend",
-        xaxis_title="Date", yaxis_title="Volume",
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#E8EAF0",
-    )
-    result["figures"].append(("Volume Trend", fig))
-
-
-def _add_static_trend(df: pd.DataFrame, col_map: dict, result: dict):
-    """Add frequency charts when no date column exists."""
-    drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
-    if drug_col:
-        counts = df[drug_col].value_counts().head(15)
-        fig = px.bar(
-            x=counts.index, y=counts.values,
-            title="Top Prescribed Drugs by Volume",
-            labels={"x": "Drug", "y": "Count"},
-            color=counts.values,
-            color_continuous_scale="Teal",
-            template="plotly_dark",
-        )
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#E8EAF0",
-            showlegend=False,
-        )
-        result["figures"].append(("Top Drugs by Volume", fig))
-
-
-
-def _plot_simple_trend(ts_df: pd.DataFrame, result: dict):
-    """Fallback rolling average trend plot."""
-    ts_df = ts_df.copy()
-    ts_df["rolling"] = ts_df["y"].rolling(window=min(3, len(ts_df)), min_periods=1).mean()
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=ts_df["ds"], y=ts_df["y"],
-        mode="lines+markers", name="Actual",
-        line=dict(color="#00C9A7"), marker=dict(size=4),
-    ))
-    fig.add_trace(go.Scatter(
-        x=ts_df["ds"], y=ts_df["rolling"],
-        mode="lines", name="Rolling Avg",
-        line=dict(color="#FFC300", dash="dash"),
-    ))
-    fig.update_layout(
-        title="Prescription Volume Trend",
-        xaxis_title="Date", yaxis_title="Volume",
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#E8EAF0",
-    )
-    result["figures"].append(("Volume Trend", fig))
-
-
-def _add_static_trend(df: pd.DataFrame, col_map: dict, result: dict):
-    """Add frequency charts when no date column exists."""
-    drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
-    if drug_col:
-        counts = df[drug_col].value_counts().head(15)
-        fig = px.bar(
-            x=counts.index, y=counts.values,
-            title="Top Prescribed Drugs by Volume",
-            labels={"x": "Drug", "y": "Count"},
-            color=counts.values,
-            color_continuous_scale="Teal",
-            template="plotly_dark",
-        )
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#E8EAF0",
-            showlegend=False,
-        )
-        result["figures"].append(("Top Drugs by Volume", fig))
+        result["figures"].append(("Top Drugs by Volume", fig))

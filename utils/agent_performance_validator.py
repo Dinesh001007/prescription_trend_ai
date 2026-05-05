@@ -339,9 +339,9 @@ class AgentPerformanceValidator:
     def generate_performance_summary(self, validation_results: Dict[str, Any]) -> str:
         """Generate comprehensive summary of agent performance validation."""
         summary = f"""
-📊 **Agent Performance Statistical Validation Report**
+Agent Performance Statistical Validation Report
 
-**Overall Summary:**
+Overall Summary:
 - Total Models Analyzed: {len(validation_results['performance_summary'])}
 - Classification Models: {len(validation_results['performance_summary'][validation_results['performance_summary']['accuracy'].notna()])}
 - Clustering Models: {len(validation_results['performance_summary'][validation_results['performance_summary']['silhouette'].notna()])}

@@ -196,11 +196,12 @@ class AdvancedCohortAnalyzer:
             features['gender_female'] = (features[gender_col].isin(['Female', 'F', 'female'])).astype(int)
         
         if diagnosis_col:
-            # Diagnosis complexity
-            diagnosis_stats = features.groupby(patient_col)[diagnosis_col].agg(['nunique', 'count']).reset_index()
-            diagnosis_stats.columns = [patient_col, 'unique_diagnoses', 'total_diagnoses']
-            diagnosis_stats['diagnosis_complexity'] = diagnosis_stats['unique_diagnoses'] * np.log1p(diagnosis_stats['total_diagnoses'])
-            features = features.merge(diagnosis_stats[[patient_col, 'unique_diagnoses', 'diagnosis_complexity']], on=patient_col, how='left')
+            if patient_col:
+                # Diagnosis complexity
+                diagnosis_stats = features.groupby(patient_col)[diagnosis_col].agg(['nunique', 'count']).reset_index()
+                diagnosis_stats.columns = [patient_col, 'unique_diagnoses', 'total_diagnoses']
+                diagnosis_stats['diagnosis_complexity'] = diagnosis_stats['unique_diagnoses'] * np.log1p(diagnosis_stats['total_diagnoses'])
+                features = features.merge(diagnosis_stats[[patient_col, 'unique_diagnoses', 'diagnosis_complexity']], on=patient_col, how='left')
             
             # Chronic disease flags
             chronic_diseases = ['diabetes', 'hypertension', 'heart', 'cardiac', 'kidney', 'liver', 'arthritis', 'asthma', 'copd', 'cancer']
@@ -221,14 +222,14 @@ class AdvancedCohortAnalyzer:
             features['elderly_polypharmacy_risk'] = (features[age_col] / 10) * features['unique_drug_count']
             features['elderly_high_risk'] = ((features[age_col] >= 65) & (features['unique_drug_count'] > 3)).astype(int)
         
-        print(f"✅ Advanced feature engineering completed with {len(features.columns)} features")
+        print(f"Advanced feature engineering completed with {len(features.columns)} features")
         return features
     
     def select_best_features(self, X: pd.DataFrame, y: np.ndarray = None, k: int = 50) -> pd.DataFrame:
         """
         Select the most informative features using multiple methods.
         """
-        print(f"🎯 Selecting top {k} features...")
+        print(f"Selecting top {k} features...")
         
         # Remove columns with low variance
         variance_threshold = 0.01
@@ -262,14 +263,14 @@ class AdvancedCohortAnalyzer:
             selected_features = top_features
         
         self.selected_features = selected_features
-        print(f"✅ Selected {len(selected_features)} best features")
+        print(f"Selected {len(selected_features)} best features")
         return X[selected_features]
     
     def apply_dimensionality_reduction(self, X: pd.DataFrame, method: str = 'pca', n_components: int = None) -> np.ndarray:
         """
         Apply dimensionality reduction for better clustering.
         """
-        print(f"🔄 Applying {method.upper()} dimensionality reduction...")
+        print(f"Applying {method.upper()} dimensionality reduction...")
         
         if n_components is None:
             # Determine optimal number of components
@@ -313,7 +314,7 @@ class AdvancedCohortAnalyzer:
         """
         Find the best scaling method for the data.
         """
-        print("⚖️ Optimizing feature scaling...")
+        print("Optimizing feature scaling...")
         
         best_scaler_name = None
         best_score = -1
@@ -350,7 +351,7 @@ class AdvancedCohortAnalyzer:
         """
         Use ensemble of multiple clustering algorithms for best results.
         """
-        print("🎭 Running advanced clustering ensemble...")
+        print("Running advanced clustering ensemble...")
         
         clustering_results = {}
         
@@ -476,7 +477,7 @@ class AdvancedCohortAnalyzer:
         """
         Select the best clustering based on multiple criteria.
         """
-        print("🏆 Selecting best clustering...")
+        print("Selecting best clustering...")
         
         best_config = None
         best_composite_score = -1
@@ -536,7 +537,7 @@ class AdvancedCohortAnalyzer:
         """
         Create comprehensive visualizations for clustering results.
         """
-        print("📊 Creating comprehensive visualizations...")
+        print("Creating comprehensive visualizations...")
         figures = []
         
         # 1. Cluster distribution
@@ -977,7 +978,7 @@ def run_cohort_agent_advanced(df: pd.DataFrame, col_map: dict) -> dict:
         figures = analyzer.create_comprehensive_visualizations(X_reduced, best_result['labels'], engineered_df, clustering_results)
         
         # 10. Perform agent performance statistical validation
-        print("📊 Performing agent performance statistical validation...")
+        print("Performing agent performance statistical validation...")
         validation_results = None
         validation_summary = ""
         
@@ -1015,7 +1016,7 @@ def run_cohort_agent_advanced(df: pd.DataFrame, col_map: dict) -> dict:
                 validation_summary = "Agent performance validation completed but no significant results available."
             
         except Exception as e:
-            print(f"⚠️ Agent performance validation failed: {e}")
+            print(f"Agent performance validation failed: {e}")
             validation_summary = "Agent performance validation could not be performed due to insufficient data or computational issues."
         
         result["figures"] = figures
@@ -1034,48 +1035,66 @@ def run_cohort_agent_advanced(df: pd.DataFrame, col_map: dict) -> dict:
         davies = best_result['davies']
         
         summary = f"""
-🚀 **Advanced Cohort Analysis with Ensemble Clustering**
+Advanced Cohort Analysis with Ensemble Clustering
 
-**Clustering Results:**
-- ✅ Algorithm: {best_result['algorithm']}
-- ✅ Clusters Identified: {n_clusters}
-- ✅ Silhouette Score: {silhouette:.3f} (Excellent: >0.5)
-- ✅ Calinski-Harabasz: {calinski:.1f}
-- ✅ Davies-Bouldin: {davies:.3f} (Lower is better)
+Clustering Results:
+- Algorithm: {best_result['algorithm']}
+- Clusters Identified: {n_clusters}
+- Silhouette Score: {silhouette:.3f} (Excellent: >0.5)
+- Calinski-Harabasz: {calinski:.1f}
+- Davies-Bouldin: {davies:.3f} (Lower is better)
 
-**Advanced Features:**
-- 🔬 Feature Engineering: {len(engineered_df.columns)} total features
-- 🎯 Feature Selection: {len(analyzer.selected_features)} best features
-- 🔄 Dimensionality Reduction: PCA with {X_reduced.shape[1]} components
-- ⚖️ Scaling Optimization: Best scaler automatically selected
+Advanced Features:
+- Feature Engineering: {len(engineered_df.columns)} total features
+- Feature Selection: {len(analyzer.selected_features)} best features
+- Dimensionality Reduction: PCA with {X_reduced.shape[1]} components
+- Scaling Optimization: Best scaler automatically selected
 
-**Ensemble Methods:**
-- 🎭 Algorithms Tested: {len(clustering_results)} configurations
-- 🏆 Best Configuration: {analyzer.best_algorithm}
-- 📊 Composite Score: {analyzer.best_score:.3f}
-- 🔍 Multi-Criteria Selection: Silhouette + Calinski + Davies-Bouldin
+Ensemble Methods:
+- Algorithms Tested: {len(clustering_results)} configurations
+- Best Configuration: {analyzer.best_algorithm}
+- Composite Score: {analyzer.best_score:.3f}
+- Multi-Criteria Selection: Silhouette + Calinski + Davies-Bouldin
 
-**Agent Performance Validation:**
+Agent Performance Validation:
 {validation_summary}
 
-**Quality Assessment:**
-- {'🟢 EXCELLENT' if silhouette > 0.5 else '🟡 GOOD' if silhouette > 0.25 else '🟠 FAIR'} Clustering Quality
-- {'🟢 OPTIMAL' if 3 <= n_clusters <= 8 else '🟡 ACCEPTABLE' if n_clusters <= 15 else '🟠 TOO MANY'} Number of Clusters
-- 📈 Feature Discrimination: Advanced interaction features
-- 🎯 Clinical Relevance: Healthcare-specific engineering
+Quality Assessment:
+- {'EXCELLENT' if silhouette > 0.5 else 'GOOD' if silhouette > 0.25 else 'FAIR'} Clustering Quality
+- {'OPTIMAL' if 3 <= n_clusters <= 8 else 'ACCEPTABLE' if n_clusters <= 15 else 'TOO MANY'} Number of Clusters
+- Feature Discrimination: Advanced interaction features
+- Clinical Relevance: Healthcare-specific engineering
 
-**Technical Improvements:**
-- ✅ Multiple clustering algorithms (KMeans, GMM, DBSCAN, HDBSCAN, Agglomerative)
-- ✅ Advanced feature engineering (polynomial, interaction, log transforms)
-- ✅ Intelligent feature selection and scaling optimization
-- ✅ Dimensionality reduction with PCA
-- ✅ Ensemble-based best configuration selection
-- ✅ Comprehensive validation metrics
-- ✅ Statistical validation with hypothesis testing
+Technical Improvements:
+- Multiple clustering algorithms (KMeans, GMM, DBSCAN, HDBSCAN, Agglomerative)
+- Advanced feature engineering (polynomial, interaction, log transforms)
+- Intelligent feature selection and scaling optimization
+- Dimensionality reduction with PCA
+- Ensemble-based best configuration selection
+- Comprehensive validation metrics
+- Statistical validation with hypothesis testing
 
-**Execution Time:** {(time.perf_counter() - start_time):.2f}s
+Execution Time: {(time.perf_counter() - start_time):.2f}s
         """
         
+        # Store full cohort results for CSV download
+        try:
+            cohort_results_df = engineered_df.copy()
+            
+            # Add patient ID if it was in the original df
+            patient_col = next((c for c, cat in col_map.items() if cat == "patient_id" and c in df.columns), None)
+            if patient_col:
+                cohort_results_df.insert(0, 'Patient_ID', df[patient_col].values)
+                
+            cohort_results_df['cohort_label'] = [f"Cohort {l}" for l in labels]
+            result["cohort_df"] = cohort_results_df
+        except Exception as e:
+            print(f"Warning: Could not generate full cohort DF: {e}")
+            # Fallback to original df
+            cohort_results_df = df.copy()
+            cohort_results_df['cohort_label'] = [f"Cohort {l}" for l in labels]
+            result["cohort_df"] = cohort_results_df
+
         result["summary"] = summary
         result["metrics"] = {
             "Algorithm": best_result['algorithm'],
@@ -1093,13 +1112,13 @@ def run_cohort_agent_advanced(df: pd.DataFrame, col_map: dict) -> dict:
             "Execution": f"{(time.perf_counter() - start_time)*1000:.1f}ms"
         }
         
-        print("\n✅ Advanced cohort analysis completed successfully!")
-        print(f"📊 {summary}")
+        print("Advanced cohort analysis completed successfully!")
+        print(f"Summary: {summary}")
         
     except Exception as e:
         result["status"] = "error"
         result["summary"] = f"Advanced cohort agent error: {str(e)}"
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         
     return result
 
@@ -1137,11 +1156,11 @@ if __name__ == "__main__":
     results = run_cohort_agent_advanced(df, col_map)
     
     if results.get("status") == "ok":
-        print("\n✅ Analysis completed successfully!")
-        print(f"📊 {results['summary']}")
+        print("\nAnalysis completed successfully!")
+        print(f"Summary: {results['summary']}")
         
-        print("\n📈 Performance Metrics:")
+        print("\nPerformance Metrics:")
         for metric, value in results["metrics"].items():
             print(f"  {metric}: {value}")
     else:
-        print(f"❌ Analysis failed: {results.get('summary', 'Unknown error')}")
+        print(f"Analysis failed: {results.get('summary', 'Unknown error')}")

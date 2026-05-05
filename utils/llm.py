@@ -151,3 +151,12 @@ def explain_image_report(context: str) -> str:
         "Use clinical reasoning and avoid speculation beyond the information provided."
     )
     return query_llm(context, system=system, temperature=0.3)
+
+
+def generate_pdf_executive_summary(summary: str) -> str:
+    system = (
+        "You are a Senior Clinical Data Analyst. Write a high-level, professional executive summary for a medical data report. "
+        "Summarize the key objectives, the analysis performed, and the high-level impact. "
+        "Use formal, academic medical language. Keep it between 100-150 words."
+    )
+    return query_llm(f"Summarize this clinical analysis: {summary}", system=system, temperature=0.3)

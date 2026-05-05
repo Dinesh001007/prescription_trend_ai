@@ -180,8 +180,27 @@ def run_pattern_agent(df: pd.DataFrame, col_map: dict) -> dict:
                 f"Most prescribed: {drug_counts.index[0]} ({drug_counts.iloc[0]} times)."
             )
 
-        # Performance metrics
-        duration = (time.perf_counter() - start_time) * 1000
+        # Store full pattern results for CSV download
+        try:
+            if 'pair_counts' in locals() and pair_counts:
+                pattern_list = []
+                for pair, count in pair_counts.items():
+                    pattern_list.append({
+                        'drug_1': pair[0],
+                        'drug_2': pair[1],
+                        'occurrences': count,
+                        'support': count / n_patients if n_patients > 0 else 0
+                    })
+                pattern_results_df = pd.DataFrame(pattern_list)
+                result["pattern_df"] = pattern_results_df.sort_values('occurrences', ascending=False)
+            else:
+                # Fallback: Just return drug frequency
+                freq_df = df[drug_col].value_counts().reset_index()
+                freq_df.columns = ['drug_name', 'prescription_count']
+                result["pattern_df"] = freq_df
+        except Exception as e:
+            print(f"Warning: Could not generate pattern DF: {e}")
+
         result["metrics"] = {
             "Confidence": f"{avg_confidence:.2f}",
             "Support": f"{max_support:.3f}",

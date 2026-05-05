@@ -16,7 +16,15 @@ from utils.llm import (
     explain_analysis,
     analyze_image_report,
     explain_image_report,
+    generate_pdf_executive_summary,
 )
+
+def convert_df_to_csv(df):
+    """Convert dataframe to CSV for download."""
+    if df is None:
+        return None
+    return df.to_csv(index=False).encode('utf-8')
+
 from utils.data_loader import (
     load_file,
     get_sample_rows,
@@ -42,10 +50,15 @@ from utils.intelligent_analyzer import IntelligentAnalyzer
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Prescription Trend AI",
+    page_title="Prescription Trend AI - Clinical Intelligence Platform",
     page_icon="💊",
     layout="wide",
     initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://github.com/Dinesh001007/prescription_trend_ai',
+        'Report a bug': "https://github.com/Dinesh001007/prescription_trend_ai/issues",
+        'About': "# Prescription Trend AI\nAn advanced multi-agent clinical intelligence platform for autonomous medical data discovery."
+    }
 )
 
 # ─── Custom CSS ───────────────────────────────────────────────────────────────
@@ -473,19 +486,27 @@ elif mode == "🩺 Image Report":
 
         if is_pdf_file(report_file.name):
             st.markdown("### Uploaded PDF report")
-            if extracted_text:
-                st.markdown("Text extracted from PDF.")
+            if extracted_text and not extracted_text.startswith("["):
+                st.success("✓ Text extracted from PDF.")
                 with st.expander("📝 Extracted Text", expanded=False):
                     st.text_area("", extracted_text, height=220)
+            elif extracted_text and extracted_text.startswith("[Error]"):
+                st.error(extracted_text)
+            elif extracted_text and extracted_text.startswith("[Warning]"):
+                st.warning(extracted_text)
+                st.info("💡 If this is a scanned PDF, please ensure Tesseract-OCR is installed on your system.")
             else:
                 st.warning("No text was extracted from the PDF. The file may be a scanned image PDF.")
         else:
             st.markdown("### Uploaded Image Report")
-            if extracted_text:
+            if extracted_text and not extracted_text.startswith("["):
+                st.success("✓ Text extracted from image.")
                 with st.expander("📝 OCR Extracted Text", expanded=False):
                     st.text_area("", extracted_text, height=220)
+            elif extracted_text and extracted_text.startswith("[Error]"):
+                st.error(extracted_text)
             else:
-                st.info("No text was extracted from the image. The current workflow can only interpret text-based reports.")
+                st.info("No text was extracted from the image. Please ensure the image contains clear text and Tesseract-OCR is installed.")
 
         modality = detect_imaging_modality(report_file.name, extracted_text or "")
         if modality:
@@ -558,597 +579,381 @@ else:
              border: 1px dashed #2A3040; border-radius: 16px; margin-top: 20px;">
             <div style="font-size:48px; margin-bottom:12px;">📂</div>
             <div style="font-family:'Syne',sans-serif; font-size:18px; font-weight:700; color:#E8EAF0;">
-                Upload a Dataset to Begin
+                Upload Medical Dataset to Begin
             </div>
             <div style="color:#5A6070; font-size:14px; margin-top:8px;">
-                Supports CSV, JSON, and Excel files up to 15MB.<br>
-                Columns are auto-detected — no schema required.
+                Supports any unknown medical structured data (CSV, JSON, Excel).<br>
+                The system will dynamically infer schema and medical meaning.
             </div>
         </div>
         """, unsafe_allow_html=True)
     else:
-        # ── Dataset Overview metrics ──
-        n_rows, n_cols = df.shape
-        n_drugs = 0
-        drug_col_guess = next((c for c in df.columns if "drug" in c.lower() or "med" in c.lower() or "name" in c.lower()), None)
-        if drug_col_guess:
-            n_drugs = df[drug_col_guess].nunique()
-        n_missing = df.isna().sum().sum()
-
-        st.markdown(f"""
-        <div class="metric-row">
-            <div class="metric-card">
-                <div class="metric-label">Records</div>
-                <div class="metric-value">{n_rows:,}</div>
-                <div class="metric-delta">Rows loaded</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Columns</div>
-                <div class="metric-value">{n_cols}</div>
-                <div class="metric-delta">Features detected</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Unique Drugs</div>
-                <div class="metric-value">{n_drugs if n_drugs else "—"}</div>
-                <div class="metric-delta">{"From drug column" if n_drugs else "Drug col not found"}</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Missing Values</div>
-                <div class="metric-value">{n_missing:,}</div>
-                <div class="metric-delta">{"⚠️ Needs attention" if n_missing > 0 else "✓ Clean"}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # ── Column Identification ──
-        st.markdown('<div class="section-header">🧠 Auto Column Identification (LLM)</div>', unsafe_allow_html=True)
-
-        if st.session_state.col_map is None:
-            with st.spinner("Phi-4 mini is identifying your column roles..."):
-                sample = get_sample_rows(df, 3)
-                col_map = identify_columns(df.columns.tolist(), sample)
-                st.session_state.col_map = col_map
-
-        col_map = st.session_state.col_map
-
-        # Intelligent data validation and analysis
-        with st.spinner("Performing intelligent data validation..."):
-            intelligent_analyzer = IntelligentAnalyzer()
-            schema_analyzer = SchemaAnalyzer()
-            
-            # Analyze data quality and types
-            validation_results = intelligent_analyzer.analyze_dataframe_intelligently(df)
-            
-            # Display data quality insights
-            if validation_results['summary_insights']:
-                st.markdown('<div class="section-header">🔍 Data Quality Insights</div>', unsafe_allow_html=True)
-                for insight in validation_results['summary_insights']:
-                    st.info(f"• {insight}")
-            
-            # Show validation errors if any
-            validation_errors = intelligent_analyzer.get_validation_errors()
-            if validation_errors:
-                st.warning("⚠️ Data Validation Warnings:")
-                for error in validation_errors:
-                    st.write(f"• {error}")
-
-        # Display column mapping as pills
-        cols_display = st.columns(min(4, len(df.columns)))
-        color_map = {
-            "drug_name": "pill",
-            "patient_id": "pill",
-            "date": "pill",
-            "risk_score": "pill-red",
-            "other": "",
-        }
-        with st.expander("📋 Column Role Mapping", expanded=True):
-            html_pills = ""
-            for col, cat in col_map.items():
-                cls = "pill-red" if cat in ["risk_score"] else "pill"
-                html_pills += f'<span class="{cls}">{col} → {cat}</span> '
-            st.markdown(f'<div style="line-height:2.2">{html_pills}</div>', unsafe_allow_html=True)
-            
-            # Show intelligent type detection results
-            st.markdown("**🧠 Intelligent Type Detection:**")
-            type_counts = validation_results['schema_overview']['type_distribution']
-            for col_name, col_type in validation_results['schema_overview']['column_types'].items():
-                if col_name in col_map:
-                    st.write(f"• {col_name}: `{col_type}` (LLM: `{col_map[col_name]}`)")
-
-        # ── Override column roles (outside expander to avoid nesting) ──
-        with st.expander("✏️ Override Column Roles"):
-            categories = ["drug_name", "patient_id", "date", "diagnosis", "age", "gender",
-                          "dosage", "frequency", "region", "risk_score", "quantity", "prescriber", "other"]
-            updated_map = {}
-            override_cols = st.columns(3)
-            for i, col in enumerate(df.columns):
-                with override_cols[i % 3]:
-                    col_cat = col_map.get(col, "other")
-                    if col_cat not in categories:
-                        col_cat = "other"
-                    updated_map[col] = st.selectbox(
-                        col,
-                        categories,
-                        index=categories.index(col_cat),
-                        key=f"col_{col}",
-                    )
-            if st.button("Apply Override"):
-                st.session_state.col_map = updated_map
+        # ── Step 1: Advanced Column Understanding ──
+        st.markdown('<div class="section-header">🧠 STEP 1: Advanced Column Understanding</div>', unsafe_allow_html=True)
+        
+        from utils.medical_pipeline import MedicalDataPipeline
+        
+        if "pipeline" not in st.session_state or st.session_state.get("last_file") != uploaded_file.name:
+            with st.spinner("🧠 Intelligently mapping medical schema and determining field semantics..."):
+                st.session_state.pipeline = MedicalDataPipeline(df)
+                st.session_state.mapping_table = st.session_state.pipeline.step1_column_understanding()
+                st.session_state.last_file = uploaded_file.name
                 st.session_state.analysis_done = False
-                st.rerun()
 
-        # ── Data Preview ──
-        with st.expander("🔍 Preview Data (first 50 rows)"):
-            st.dataframe(df.head(50), use_container_width=True)
+        st.dataframe(st.session_state.mapping_table, use_container_width=True)
 
-        # ── Run Analysis ──
-        st.markdown('<div class="section-header">🚀 Agent Analysis</div>', unsafe_allow_html=True)
+        # ── Step 2: Data Preprocessing ──
+        with st.expander("⚙️ STEP 2: Data Preprocessing (Automatic)", expanded=False):
+            if "preprocessing_log" not in st.session_state:
+                with st.spinner("⚙️ Executing automated data quality checks and feature engineering..."):
+                    res = st.session_state.pipeline.step2_preprocessing()
+                    st.session_state.preprocessing_log = res["preprocessing_log"]
+            
+            for log in st.session_state.preprocessing_log:
+                st.write(f"• {log}")
+
+        # ── Step 3: Agent Execution ──
+        st.markdown('<div class="section-header">🚀 STEP 3: Agent Execution</div>', unsafe_allow_html=True)
 
         if not st.session_state.analysis_done:
-            if st.button("▶ Run Full Analysis", use_container_width=True):
-                st.session_state.analysis_results = {}
-
-                progress = st.progress(0, text="Starting agents...")
-
-                agents_to_run = []
-                if run_pattern:
-                    agents_to_run.append(("pattern", "Co-Prescription Patterns", "agents.pattern_agent"))
-                if run_risk:
-                    agents_to_run.append(("risk", "Risk Analysis", "agents.risk_agent"))
-                if run_cohort:
-                    agents_to_run.append(("cohort", "Cohort Clustering", "agents.cohort_agent"))
-                if run_anomaly:
-                    agents_to_run.append(("anomaly", "Anomaly Detection", "agents.anomaly_agent"))
-                if run_trend:
-                    agents_to_run.append(("trend", "Trend Forecasting", "agents.trend_agent"))
-
-                for i, (key, label, _) in enumerate(agents_to_run):
-                    progress.progress((i) / len(agents_to_run), text=f"Running {label}...")
-                    try:
-                        if key == "risk":
-                            st.session_state.analysis_results["risk"] = run_risk_agent(df, col_map)
-                        elif key == "cohort":
-                            st.session_state.analysis_results["cohort"] = run_cohort_agent(df, col_map)
-                        elif key == "anomaly":
-                            st.session_state.analysis_results["anomaly"] = run_anomaly_agent(df, col_map)
-                        elif key == "trend":
-                            st.session_state.analysis_results["trend"] = run_trend_agent(df, col_map)
-                        elif key == "pattern":
-                            st.session_state.analysis_results["pattern"] = run_pattern_agent(df, col_map)
-                    except Exception as e:
-                        st.session_state.analysis_results[key] = {"status": "error", "summary": str(e), "figures": []}
-
-                progress.progress(1.0, text="Generating LLM insights...")
-
-                # Build overall summary for LLM
-                summaries = []
-                for key, res in st.session_state.analysis_results.items():
-                    summaries.append(f"[{key.upper()} AGENT]: {res.get('summary', '')}")
-                overall_summary = build_summary(df, col_map) + "\n\n" + "\n".join(summaries)
-
-                with st.spinner("Phi-4 mini generating clinical insights..."):
-                    llm_insights = generate_insights(overall_summary, col_map)
+            if st.button("▶ Run Full Multi-Agent Analysis", use_container_width=True):
+                progress = st.progress(0, text="Initializing Medical Agents...")
+                
+                # Configure agents
+                agents_config = {
+                    "risk": run_risk,
+                    "cohort": run_cohort,
+                    "anomaly": run_anomaly,
+                    "trend": run_trend,
+                    "pattern": run_pattern
+                }
+                
+                # Execute Pipeline
+                with st.spinner("Executing pipeline agents..."):
+                    results = st.session_state.pipeline.step3_agent_execution(agents_config)
+                    st.session_state.analysis_results = results
+                
+                # STEP 4: Evaluating results
+                with st.spinner("Step 4: Evaluating results..."):
+                    st.session_state.eval_metrics = st.session_state.pipeline.step4_evaluation(st.session_state.analysis_results)
+                
+                # Step 5: Final Insights (LLM)
+                with st.spinner("Phi-4 mini generating clinical report..."):
+                    summaries = []
+                    for key, res in results.items():
+                        summaries.append(f"[{key.upper()} AGENT]: {res.get('summary', '')}")
+                    
+                    overall_summary = f"MEDICAL DATASET ANALYSIS\n{df.shape}\n" + "\n\n" + "\n".join(summaries)
+                    llm_insights = generate_insights(overall_summary, {})
                     st.session_state.llm_insights = llm_insights
+                    st.session_state.pdf_summary = generate_pdf_executive_summary(overall_summary)
 
                 st.session_state.analysis_done = True
-                progress.empty()
                 st.rerun()
 
-        # ── Show Results ──
-        if st.session_state.analysis_done and hasattr(st.session_state, "analysis_results"):
-            results = st.session_state.analysis_results
-
-            # Model Accuracy Summary
-            st.markdown('<div class="section-header">📊 Model Performance Summary</div>', unsafe_allow_html=True)
-            
-            # Collect all accuracy metrics
-            all_accuracy_metrics = []
-            for agent_key, res in results.items():
-                if res.get("status") == "ok" and res.get("metrics"):
-                    metrics = res.get("metrics", {})
-                    accuracy_data = {
-                        "agent": agent_key.title(),
-                        "model": metrics.get("Model", "Unknown"),
-                        "accuracy": None,
-                        "precision": None,
-                        "recall": None,
-                        "silhouette": None,
-                        "rmse": None,
-                        "mae": None,
-                        "confidence": None,
-                        "execution": metrics.get("Execution", "N/A")
-                    }
-                    
-                    for metric_name in ["accuracy", "precision", "recall", "silhouette", "rmse", "mae", "confidence"]:
-                        if metric_name.capitalize() in metrics:
-                            accuracy_data[metric_name] = metrics[metric_name.capitalize()]
-                    
-                    all_accuracy_metrics.append(accuracy_data)
-            
-            if all_accuracy_metrics:
-                # Create accuracy summary table
-                accuracy_df = pd.DataFrame(all_accuracy_metrics)
-                
-                # Display as styled table
-                st.markdown("""
-                <style>
-                .accuracy-table {
-                    background: #161A22;
-                    border: 1px solid #1E2330;
-                    border-radius: 14px;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                }
-                .accuracy-table table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    color: #E8EAF0;
-                }
-                .accuracy-table th {
-                    background: #0D0F14;
-                    padding: 12px;
-                    text-align: left;
-                    font-weight: 600;
-                    color: #00C9A7;
-                    border-bottom: 2px solid #00C9A7;
-                }
-                .accuracy-table td {
-                    padding: 10px 12px;
-                    border-bottom: 1px solid #1E2330;
-                }
-                .accuracy-high { color: #00C9A7; font-weight: 600; }
-                .accuracy-medium { color: #FFC300; font-weight: 500; }
-                .accuracy-low { color: #FF6B6B; font-weight: 500; }
-                </style>
-                """, unsafe_allow_html=True)
-                
-                st.markdown('<div class="accuracy-table">', unsafe_allow_html=True)
-                
-                # Create HTML table
-                table_html = """
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Model</th>
-                            <th>Agent</th>
-                            <th>Accuracy</th>
-                            <th>Precision</th>
-                            <th>Recall</th>
-                            <th>Silhouette</th>
-                            <th>RMSE</th>
-                            <th>MAE</th>
-                            <th>Confidence</th>
-                            <th>Execution</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                """
-                
-                for row in accuracy_df.itertuples():
-                    # Determine accuracy class
-                    acc_class = "accuracy-high"
-                    if row.accuracy:
-                        acc_val = float(row.accuracy.rstrip('%')) if '%' in row.accuracy else float(row.accuracy)
-                        if acc_val >= 90:
-                            acc_class = "accuracy-high"
-                        elif acc_val >= 70:
-                            acc_class = "accuracy-medium"
-                        else:
-                            acc_class = "accuracy-low"
-                    
-                    table_html += f"""
-                    <tr>
-                        <td><strong>{row.model}</strong></td>
-                        <td>{row.agent}</td>
-                        <td class="{acc_class}">{row.accuracy or '—'}</td>
-                        <td>{row.precision or '—'}</td>
-                        <td>{row.recall or '—'}</td>
-                        <td>{row.silhouette or '—'}</td>
-                        <td>{row.rmse or '—'}</td>
-                        <td>{row.mae or '—'}</td>
-                        <td>{row.confidence or '—'}</td>
-                        <td>{row.execution}</td>
-                    </tr>
-                    """
-                
-                table_html += "</tbody></table>"
-                st.markdown(table_html, unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            # LLM Insights
-            st.markdown('<div class="section-header">🤖 Phi-4 mini Clinical Insights</div>', unsafe_allow_html=True)
-            if hasattr(st.session_state, "llm_insights"):
-                if "ERROR_OLLAMA_DOWN" in st.session_state.llm_insights:
-                    st.error("Ollama not running. Start with `ollama serve`.")
-                else:
-                    st.markdown(
-                        f'<div class="insight-box">{st.session_state.llm_insights}</div>',
-                        unsafe_allow_html=True,
+        # ── STEP 5: FINAL OUTPUT FORMAT ──
+        if st.session_state.analysis_done:
+            col_title, col_download = st.columns([3, 1])
+            with col_title:
+                st.markdown('<div class="section-header">📋 STEP 5: FINAL MEDICAL ANALYSIS REPORT</div>', unsafe_allow_html=True)
+            with col_download:
+                try:
+                    pdf_data = generate_pdf_report(
+                        st.session_state.df, 
+                        st.session_state.col_map, 
+                        st.session_state.analysis_results,
+                        st.session_state.llm_insights,
+                        dynamic_summary=st.session_state.get("pdf_summary")
                     )
+                    st.download_button(
+                        label="📥 Download PDF Report",
+                        data=pdf_data,
+                        file_name=f"medical_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"PDF generation failed: {e}")
 
-            # Risk Alerts
-            if "risk" in results and results["risk"].get("risk_df") is not None:
-                risk_df = results["risk"]["risk_df"]
-                high_risk = risk_df[risk_df["__risk_label"] == "High Risk"]
-                if len(high_risk) > 0:
-                    st.markdown(f"""
-                    <div class="alert-box">
-                        <div class="alert-box-title">⚠️ Risk Alert System</div>
-                        <div style="color:#E8EAF0; margin-top:6px; font-size:14px;">
-                            <strong>{len(high_risk)}</strong> high-risk prescriptions detected
-                            ({100*len(high_risk)/len(risk_df):.1f}% of dataset).
-                            Review flagged records immediately.
-                        </div>
+            tabs = st.tabs([
+                "📊 Dataset Summary", 
+                "🧬 Mapping & Quality", 
+                "⚠️ Risk Analysis", 
+                "👥 Cohort Analysis", 
+                "🔍 Anomaly Detection", 
+                "🧩 Pattern Analysis",
+                "📈 Trend Analysis",
+                "⭐ Final Insights"
+            ])
+
+            with tabs[0]:
+                n_rows, n_cols = df.shape
+                st.markdown(f"""
+                <div class="metric-row">
+                    <div class="metric-card">
+                        <div class="metric-label">Records</div>
+                        <div class="metric-value">{n_rows:,}</div>
                     </div>
-                    """, unsafe_allow_html=True)
-
-            # Anomaly Alerts
-            if "anomaly" in results and results["anomaly"].get("anomaly_df") is not None:
-                anom_df = results["anomaly"]["anomaly_df"]
-                n_anom = (anom_df["__anomaly"] == "Anomaly").sum()
-                if n_anom > 0:
-                    st.markdown(f"""
-                    <div class="alert-box">
-                        <div class="alert-box-title">🔴 Anomaly Alert</div>
-                        <div style="color:#E8EAF0; margin-top:6px; font-size:14px;">
-                            <strong>{n_anom}</strong> anomalous prescriptions identified by Isolation Forest.
-                            These may indicate unusual dosing, rare combinations, or data errors.
-                        </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Features</div>
+                        <div class="metric-value">{n_cols}</div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    <div class="metric-card">
+                        <div class="metric-label">Quality Score</div>
+                        <div class="metric-value">{st.session_state.eval_metrics.get('Analysis Confidence Score', 0)*100:.0f}%</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                st.dataframe(df.head(10), use_container_width=True)
 
-            # ── Visualization Tabs ──
-            tab_names = []
-            if "pattern" in results:
-                tab_names.append("📊 Patterns")
-            if "risk" in results:
-                tab_names.append("🔴 Risk")
-            if "cohort" in results:
-                tab_names.append("👥 Cohorts")
-            if "anomaly" in results:
-                tab_names.append("🚨 Anomalies")
-            if "trend" in results:
-                tab_names.append("📈 Trends")
-            tab_names.append("🗂 Data Table")
+            with tabs[1]:
+                st.markdown("### Column Mapping Table")
+                st.dataframe(st.session_state.mapping_table, use_container_width=True)
+                st.markdown("### Evaluation Metrics")
+                for k, v in st.session_state.eval_metrics.items():
+                    if k != "statistical_validation":
+                        st.write(f"**{k}:** {v}")
 
-            if tab_names:
-                tabs = st.tabs(tab_names)
-                tab_idx = 0
+                # --- Statistical Validation ---
+                st.markdown("---")
+                st.markdown("### 🔬 Multi-Agent Statistical Validation")
+                val_data = st.session_state.eval_metrics.get("statistical_validation")
+                if val_data and val_data.get("validation_figure"):
+                    st.plotly_chart(val_data["validation_figure"], use_container_width=True)
+                    
+                    with st.expander("📄 View Statistical Validation Report"):
+                        summary = val_data["validation_results"].get("summary_report", "No summary available")
+                        st.markdown(f"```\n{summary}\n```")
+                        
+                        table = val_data["validation_results"].get("validation_table")
+                        if table is not None and not table.empty:
+                            st.dataframe(table, use_container_width=True)
+                else:
+                    st.info("Insufficient data for multi-agent statistical comparison.")
 
-                def show_agent_tab(tab, agent_key, label):
-                    with tab:
-                        if agent_key in results:
-                            res = results[agent_key]
-                            if res["status"] == "error":
-                                st.error(f"Agent error: {res['summary']}")
-                            elif res["status"] in ["insufficient_columns", "no_drug_col", "no_date"]:
-                                st.info(res["summary"])
-                            else:
-                                # Metrics Row with Accuracy Highlight
-                                metrics = res.get("metrics", {})
-                                if metrics:
-                                    # Separate accuracy-related metrics from others
-                                    accuracy_metrics = {}
-                                    other_metrics = {}
-                                    
-                                    for m_label, m_value in metrics.items():
-                                        if m_label.lower() in ["accuracy", "precision", "recall", "silhouette", "rmse", "mae", "confidence"]:
-                                            accuracy_metrics[m_label] = m_value
-                                        else:
-                                            other_metrics[m_label] = m_value
-                                    
-                                    # Display accuracy metrics prominently first
-                                    if accuracy_metrics:
-                                        st.markdown('<div style="margin-bottom: 16px;"><h4 style="color: #00C9A7; font-size: 14px; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 1px;">🎯 Model Performance Metrics</h4></div>', unsafe_allow_html=True)
-                                        accuracy_html = '<div class="metric-row" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 12px;">'
-                                        for m_label, m_value in accuracy_metrics.items():
-                                            # Add special styling for accuracy
-                                            if m_label.lower() == "accuracy":
-                                                accuracy_html += f'<div class="metric-card" style="border: 2px solid #00C9A7; box-shadow: 0 0 16px rgba(0,201,167,0.3);"><div class="metric-label" style="color: #00C9A7;">⭐ {m_label}</div><div class="metric-value" style="font-size: 20px; color: #00C9A7; font-weight: 800;">{m_value}</div></div>'
-                                            elif m_label.lower() in ["precision", "recall"]:
-                                                accuracy_html += f'<div class="metric-card" style="border: 1px solid #FFC300;"><div class="metric-label" style="color: #FFC300;">📊 {m_label}</div><div class="metric-value" style="font-size: 18px; color: #FFC300;">{m_value}</div></div>'
-                                            elif m_label.lower() == "silhouette":
-                                                accuracy_html += f'<div class="metric-card" style="border: 1px solid #007AFF;"><div class="metric-label" style="color: #007AFF;">🔷 {m_label}</div><div class="metric-value" style="font-size: 18px; color: #007AFF;">{m_value}</div></div>'
-                                            elif m_label.lower() in ["rmse", "mae"]:
-                                                accuracy_html += f'<div class="metric-card" style="border: 1px solid #FF6B6B;"><div class="metric-label" style="color: #FF6B6B;">📉 {m_label}</div><div class="metric-value" style="font-size: 18px; color: #FF6B6B;">{m_value}</div></div>'
-                                            else:
-                                                accuracy_html += f'<div class="metric-card"><div class="metric-label">{m_label}</div><div class="metric-value" style="font-size: 18px;">{m_value}</div></div>'
-                                        accuracy_html += "</div>"
-                                        st.markdown(accuracy_html, unsafe_allow_html=True)
-                                    
-                                    # Display other metrics
-                                    if other_metrics:
-                                        st.markdown('<div style="margin-bottom: 16px;"><h4 style="color: #5A6070; font-size: 14px; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 1px;">⚙️ Model Details</h4></div>', unsafe_allow_html=True)
-                                        other_html = '<div class="metric-row" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));">'
-                                        for m_label, m_value in other_metrics.items():
-                                            other_html += f'<div class="metric-card"><div class="metric-label">{m_label}</div><div class="metric-value" style="font-size: 16px;">{m_value}</div></div>'
-                                        other_html += "</div>"
-                                        st.markdown(other_html, unsafe_allow_html=True)
+            with tabs[2]:
+                if "risk" in st.session_state.analysis_results:
+                    res = st.session_state.analysis_results["risk"]
+                    st.markdown(res.get("summary", "No summary"))
+                    
+                    if "risk_df" in res:
+                        with st.expander("📄 View Processed Risk Data Preview"):
+                            st.dataframe(res["risk_df"].head(100), use_container_width=True)
+                            col_risk1, col_risk2 = st.columns(2)
+                            with col_risk1:
+                                st.download_button(
+                                    label="📥 Download Full Risk Analysis CSV",
+                                    data=convert_df_to_csv(res["risk_df"]),
+                                    file_name="medical_risk_analysis_full.csv",
+                                    mime="text/csv",
+                                    key="download_risk_full"
+                                )
+                            with col_risk2:
+                                high_risk_df = res["risk_df"][res["risk_df"]["risk_label"] == "High Risk"]
+                                st.download_button(
+                                    label="⚠️ Download High Risk Patients Only",
+                                    data=convert_df_to_csv(high_risk_df),
+                                    file_name="high_risk_patients.csv",
+                                    mime="text/csv",
+                                    key="download_risk_high"
+                                )
+                    
+                    figs = res.get("figures", [])
+                    for i in range(0, len(figs), 2):
+                        cols = st.columns(2)
+                        for j in range(2):
+                            if i + j < len(figs):
+                                title, fig = figs[i+j]
+                                with cols[j]:
+                                    st.plotly_chart(fig, use_container_width=True)
 
+                    # --- Agent-Specific Statistical Validation ---
+                    if "statistical_validation" in res:
+                        with st.expander("🔬 View Agent-Specific Statistical Validation"):
+                            val = res["statistical_validation"]
+                            st.markdown(val.get("validation_summary", ""))
+                            table = val.get("validation_table")
+                            if table is not None and not table.empty:
+                                st.dataframe(table, use_container_width=True)
 
-                                # Summary
-                                if res.get("summary"):
-                                    st.markdown(f'<div class="insight-box" style="font-size:13px">{res["summary"]}</div>', unsafe_allow_html=True)
-
-                                # Charts
-                                figs = res.get("figures", [])
-                                if figs:
-                                    for i in range(0, len(figs), 2):
-                                        chart_cols = st.columns(2 if i + 1 < len(figs) else 1)
-                                        for j, (title, fig) in enumerate(figs[i:i+2]):
-                                            with chart_cols[j]:
-                                                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-
-                for tname in tab_names:
-                    if tname == "📊 Patterns":
-                        show_agent_tab(tabs[tab_idx], "pattern", "Patterns")
-                    elif tname == "🔴 Risk":
-                        show_agent_tab(tabs[tab_idx], "risk", "Risk")
-                    elif tname == "👥 Cohorts":
-                        show_agent_tab(tabs[tab_idx], "cohort", "Cohorts")
-                    elif tname == "🚨 Anomalies":
-                        show_agent_tab(tabs[tab_idx], "anomaly", "Anomalies")
-                    elif tname == "📈 Trends":
-                        show_agent_tab(tabs[tab_idx], "trend", "Trends")
-                    elif tname == "🗂 Data Table":
-                        with tabs[tab_idx]:
-                            st.markdown("### Full Dataset")
-                            # Add agent columns to display
-                            display_df = df.copy()
-                            if "risk" in results and results["risk"].get("risk_df") is not None:
-                                display_df["Risk Score"] = results["risk"]["risk_df"]["__risk_score"].round(3)
-                                display_df["Risk Label"] = results["risk"]["risk_df"]["__risk_label"]
-                            if "cohort" in results and results["cohort"].get("cohort_df") is not None:
-                                display_df["Cohort"] = results["cohort"]["cohort_df"]["__cohort"]
-                            if "anomaly" in results and results["anomaly"].get("anomaly_df") is not None:
-                                display_df["Anomaly"] = results["anomaly"]["anomaly_df"]["__anomaly"]
-                            st.dataframe(display_df, use_container_width=True)
-                            csv_export = display_df.to_csv(index=False).encode()
+            with tabs[3]:
+                if "cohort" in st.session_state.analysis_results:
+                    res = st.session_state.analysis_results["cohort"]
+                    st.markdown(res.get("summary", "No summary"))
+                    
+                    if "cohort_df" in res:
+                        with st.expander("📄 View Patient Cohort Data Preview"):
+                            st.dataframe(res["cohort_df"].head(100), use_container_width=True)
                             st.download_button(
-                                "⬇ Download Analyzed Dataset",
-                                csv_export,
-                                "prescription_analysis.csv",
-                                "text/csv",
+                                label="📥 Download Full Patient Cohort Data (CSV)",
+                                data=convert_df_to_csv(res["cohort_df"]),
+                                file_name="patient_cohort_analysis.csv",
+                                mime="text/csv",
+                                key="download_cohort"
                             )
-                    tab_idx += 1
+                        
+                    figs = res.get("figures", [])
+                    for i in range(0, len(figs), 2):
+                        cols = st.columns(2)
+                        for j in range(2):
+                            if i + j < len(figs):
+                                title, fig = figs[i+j]
+                                with cols[j]:
+                                    st.plotly_chart(fig, use_container_width=True)
 
-            # PDF Download Section
-            st.markdown("---")
-            st.markdown('<div class="section-header">📄 Download Analysis Report</div>', unsafe_allow_html=True)
-            
-            # Initialize session state for download buttons
-            if 'generate_full_report' not in st.session_state:
-                st.session_state.generate_full_report = False
-            if 'generate_visualizations' not in st.session_state:
-                st.session_state.generate_visualizations = False
-            if 'generate_complete_package' not in st.session_state:
-                st.session_state.generate_complete_package = False
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if st.button("📊 Download Full Report", use_container_width=True):
-                    st.session_state.generate_full_report = True
-                    st.session_state.generate_visualizations = False
-                    st.session_state.generate_complete_package = False
-                    st.rerun()
-                
-                if st.session_state.generate_full_report:
-                    with st.spinner("Generating comprehensive PDF report..."):
-                        try:
-                            llm_insights = getattr(st.session_state, 'llm_insights', None)
-                            pdf_bytes = generate_pdf_report(df, col_map, results, llm_insights)
+                    # --- Agent-Specific Statistical Validation ---
+                    if "statistical_validation" in res:
+                        with st.expander("🔬 View Agent-Specific Statistical Validation"):
+                            val = res["statistical_validation"]
+                            st.markdown(val.get("validation_summary", ""))
+                            table = val.get("validation_table")
+                            if table is not None and not table.empty:
+                                st.dataframe(table, use_container_width=True)
+
+            with tabs[4]:
+                if "anomaly" in st.session_state.analysis_results:
+                    res = st.session_state.analysis_results["anomaly"]
+                    st.markdown(res.get("summary", "No summary"))
+                    
+                    if "anomaly_df" in res:
+                        with st.expander("📄 View Anomaly Detection Data Preview"):
+                            st.dataframe(res["anomaly_df"].head(100), use_container_width=True)
+                            col_anom1, col_anom2 = st.columns(2)
+                            with col_anom1:
+                                st.download_button(
+                                    label="📥 Download Full Anomaly Data CSV",
+                                    data=convert_df_to_csv(res["anomaly_df"]),
+                                    file_name="prescription_anomalies_full.csv",
+                                    mime="text/csv",
+                                    key="download_anomaly_full"
+                                )
+                            with col_anom2:
+                                anomalies_only_df = res["anomaly_df"][res["anomaly_df"]["anomaly_label"] == "Anomaly"]
+                                st.download_button(
+                                    label="🔍 Download Detected Anomalies Only",
+                                    data=convert_df_to_csv(anomalies_only_df),
+                                    file_name="detected_anomalies.csv",
+                                    mime="text/csv",
+                                    key="download_anomaly_only"
+                                )
+                        
+                    figs = res.get("figures", [])
+                    for i in range(0, len(figs), 2):
+                        cols = st.columns(2)
+                        for j in range(2):
+                            if i + j < len(figs):
+                                title, fig = figs[i+j]
+                                with cols[j]:
+                                    st.plotly_chart(fig, use_container_width=True)
+
+                    # --- Agent-Specific Statistical Validation ---
+                    if "statistical_validation" in res:
+                        with st.expander("🔬 View Agent-Specific Statistical Validation"):
+                            val = res["statistical_validation"]
+                            st.markdown(val.get("validation_summary", ""))
+                            table = val.get("validation_table")
+                            if table is not None and not table.empty:
+                                st.dataframe(table, use_container_width=True)
+
+            with tabs[5]:
+                if "pattern" in st.session_state.analysis_results:
+                    res = st.session_state.analysis_results["pattern"]
+                    st.markdown(res.get("summary", "No summary"))
+                    
+                    if "pattern_df" in res:
+                        with st.expander("📄 View Pattern Mining Data Preview"):
+                            st.dataframe(res["pattern_df"].head(100), use_container_width=True)
                             st.download_button(
-                                label="⬇ Full Analysis Report (PDF)",
-                                data=pdf_bytes,
-                                file_name=f"prescription_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                                mime="application/pdf",
-                                use_container_width=True
+                                label="📥 Download Full Pattern Mining Data (CSV)",
+                                data=convert_df_to_csv(res["pattern_df"]),
+                                file_name="prescription_patterns.csv",
+                                mime="text/csv",
+                                key="download_pattern"
                             )
-                            st.session_state.generate_full_report = False
-                        except Exception as e:
-                            st.error(f"Error generating PDF report: {str(e)}")
-                            st.session_state.generate_full_report = False
-            
-            with col2:
-                if st.button("📈 Download Visualizations", use_container_width=True):
-                    st.session_state.generate_full_report = False
-                    st.session_state.generate_visualizations = True
-                    st.session_state.generate_complete_package = False
-                    st.rerun()
-                
-                if st.session_state.generate_visualizations:
-                    with st.spinner("Generating visualizations PDF..."):
-                        try:
-                            viz_pdf_bytes = create_visualizations_pdf(results)
-                            st.download_button(
-                                label="⬇ Visualizations Only (PDF)",
-                                data=viz_pdf_bytes,
-                                file_name=f"prescription_visualizations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                                mime="application/pdf",
-                                use_container_width=True
-                            )
-                            st.session_state.generate_visualizations = False
-                        except Exception as e:
-                            st.error(f"Error generating visualizations PDF: {str(e)}")
-                            st.session_state.generate_visualizations = False
-            
-            with col3:
-                # Generate combined report (both text and visualizations)
-                if st.button("📋 Download Complete Package", use_container_width=True):
-                    st.session_state.generate_full_report = False
-                    st.session_state.generate_visualizations = False
-                    st.session_state.generate_complete_package = True
-                    st.rerun()
-                
-                if st.session_state.generate_complete_package:
-                    with st.spinner("Generating complete analysis package..."):
-                        try:
-                            from reportlab.lib.utils import ImageReader
-                            import zipfile
-                            import io
+                        
+                    figs = res.get("figures", [])
+                    for i in range(0, len(figs), 2):
+                        cols = st.columns(2)
+                        for j in range(2):
+                            if i + j < len(figs):
+                                title, fig = figs[i+j]
+                                with cols[j]:
+                                    st.plotly_chart(fig, use_container_width=True)
+
+                    # --- Agent-Specific Statistical Validation ---
+                    if "statistical_validation" in res:
+                        with st.expander("🔬 View Agent-Specific Statistical Validation"):
+                            val = res["statistical_validation"]
+                            st.markdown(val.get("validation_summary", ""))
+                            table = val.get("validation_table")
+                            if table is not None and not table.empty:
+                                st.dataframe(table, use_container_width=True)
+
+            with tabs[6]:
+                if "trend" in st.session_state.analysis_results:
+                    res = st.session_state.analysis_results["trend"]
+                    if res.get("status") == "ok":
+                        st.markdown(res.get("summary", "No summary"))
+                        
+                        if "trend_df" in res:
+                            with st.expander("📄 View Trend & Forecast Data Preview"):
+                                st.dataframe(res["trend_df"].head(100), use_container_width=True)
+                                st.download_button(
+                                    label="📥 Download Full Trend & Forecast Data (CSV)",
+                                    data=convert_df_to_csv(res["trend_df"]),
+                                    file_name="prescription_trends.csv",
+                                    mime="text/csv",
+                                    key="download_trend"
+                                )
                             
-                            # Create zip file
-                            zip_buffer = io.BytesIO()
-                            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                                # Add main report
-                                llm_insights = getattr(st.session_state, 'llm_insights', None)
-                                main_pdf = generate_pdf_report(df, col_map, results, llm_insights)
-                                zip_file.writestr(f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", main_pdf)
-                                
-                                # Add visualizations
-                                viz_pdf = create_visualizations_pdf(results)
-                                zip_file.writestr(f"visualizations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", viz_pdf)
-                                
-                                # Add CSV data
-                                csv_data = df.to_csv(index=False)
-                                zip_file.writestr(f"dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", csv_data)
-                            
-                            zip_buffer.seek(0)
-                            st.download_button(
-                                label="⬇ Complete Package (ZIP)",
-                                data=zip_buffer.getvalue(),
-                                file_name=f"prescription_complete_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                                mime="application/zip",
-                                use_container_width=True
-                            )
-                            st.session_state.generate_complete_package = False
-                        except Exception as e:
-                            st.error(f"Error generating complete package: {str(e)}")
-                            st.session_state.generate_complete_package = False
+                        figs = res.get("figures", [])
+                        for i in range(0, len(figs), 2):
+                            cols = st.columns(2)
+                            for j in range(2):
+                                if i + j < len(figs):
+                                    title, fig = figs[i+j]
+                                    with cols[j]:
+                                        st.plotly_chart(fig, use_container_width=True)
 
-            # Reset button
-            st.markdown("---")
+                        # --- Agent-Specific Statistical Validation ---
+                        if "statistical_validation" in res:
+                            with st.expander("🔬 View Agent-Specific Statistical Validation"):
+                                val = res["statistical_validation"]
+                                st.markdown(val.get("validation_summary", ""))
+                                table = val.get("validation_table")
+                                if table is not None and not table.empty:
+                                    st.dataframe(table, use_container_width=True)
+                    else:
+                        st.info("Temporal data not detected or trend analysis skipped.")
+
+            with tabs[7]:
+                st.markdown('<div class="insight-box">', unsafe_allow_html=True)
+                st.markdown(st.session_state.llm_insights)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                st.markdown(f"### Analysis Confidence Score: **{st.session_state.eval_metrics.get('Analysis Confidence Score', 0)*100:.0f}%**")
+
+            # ── Reset Analysis ──
             if st.button("🔄 Reset Analysis"):
                 st.session_state.analysis_done = False
-                st.session_state.col_map = None
-                if hasattr(st.session_state, "analysis_results"):
-                    del st.session_state.analysis_results
-                if hasattr(st.session_state, "llm_insights"):
-                    del st.session_state.llm_insights
+                st.session_state.analysis_results = {}
                 st.rerun()
 
-        # ── Chat for dataset queries ──
-        st.markdown('<div class="section-header">💬 Ask About Your Dataset</div>', unsafe_allow_html=True)
+            # ── Chat for dataset queries ──
+            st.markdown('<div class="section-header">💬 Ask About Your Dataset</div>', unsafe_allow_html=True)
 
-        for msg in st.session_state.chat_history:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
 
-        if prompt := st.chat_input("Ask a question about your data or analysis..."):
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
+            if prompt := st.chat_input("Ask a question about your data...", key="dataset_chat"):
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
 
-            with st.chat_message("assistant"):
-                with st.spinner("Analyzing..."):
-                    context = (
-                        f"Dataset summary:\n{build_summary(df, col_map)}\n\n"
-                        f"User question: {prompt}"
-                    )
-                    response = explain_analysis(context)
-                    if "ERROR_OLLAMA_DOWN" in response:
-                        response = "⚠️ Ollama is not running. Please start it with `ollama serve`."
-                    st.markdown(response)
-                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                with st.chat_message("assistant"):
+                    with st.spinner("Analyzing..."):
+                        context = f"Dataset context: {st.session_state.mapping_table.to_string()}\nInsights: {st.session_state.llm_insights}\nQuestion: {prompt}"
+                        response = explain_analysis(context)
+                        st.markdown(response)
+                        st.session_state.chat_history.append({"role": "assistant", "content": response})
