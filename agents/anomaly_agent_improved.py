@@ -216,7 +216,7 @@ class HealthcareAnomalyDetector:
         print(f"Preprocessed {len(feature_cols)} features")
         return scaled_data, processed_df
     
-    def train_vae(self, X, epochs=100, batch_size=32, learning_rate=0.001):
+    def train_vae(self, X, epochs=25, batch_size=32, learning_rate=0.001):
         """
         Train Variational Autoencoder for anomaly detection.
         """
@@ -261,7 +261,7 @@ class HealthcareAnomalyDetector:
             avg_loss = epoch_loss / len(dataloader.dataset)
             losses.append(avg_loss)
             
-            if (epoch + 1) % 20 == 0:
+            if (epoch + 1) % 5 == 0:
                 print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}")
         
         print("VAE training completed")
@@ -691,7 +691,7 @@ def run_anomaly_agent_improved(df: pd.DataFrame, col_map: dict) -> dict:
             return result
         
         # Train VAE
-        losses = detector.train_vae(X, epochs=50, batch_size=32, learning_rate=0.001)
+        losses = detector.train_vae(X, epochs=25, batch_size=32, learning_rate=0.001)
         
         # Calculate reconstruction errors
         errors = detector.calculate_reconstruction_errors(X)

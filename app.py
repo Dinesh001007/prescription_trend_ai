@@ -71,7 +71,13 @@ html, body, [class*="css"] {
 }
 
 /* Hide Streamlit default header */
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu, footer { visibility: hidden; }
+header[data-testid="stHeader"] { 
+    background: transparent !important; 
+}
+header[data-testid="stHeader"] > div:not(:first-child) {
+    display: none;
+}
 
 /* App background */
 .stApp {
@@ -321,7 +327,7 @@ st.markdown("""
 with st.sidebar:
     st.markdown("### 🔍 Input Mode")
     mode = st.radio(
-        "",
+        "Select Mode",
         ["💊 Drug Lookup", "📂 Dataset Analysis", "🩺 Image Report"],
         label_visibility="collapsed",
     )
@@ -374,7 +380,7 @@ if mode == "💊 Drug Lookup":
     col1, col2 = st.columns([3, 1])
     with col1:
         drug_query = st.text_input(
-            "",
+            "Drug Query",
             placeholder="Enter a drug name  (e.g. Metformin, Atorvastatin, Amoxicillin...)",
             label_visibility="collapsed",
         )
@@ -489,7 +495,7 @@ elif mode == "🩺 Image Report":
             if extracted_text and not extracted_text.startswith("["):
                 st.success("✓ Text extracted from PDF.")
                 with st.expander("📝 Extracted Text", expanded=False):
-                    st.text_area("", extracted_text, height=220)
+                    st.text_area("Extracted Text", extracted_text, height=220, label_visibility="collapsed")
             elif extracted_text and extracted_text.startswith("[Error]"):
                 st.error(extracted_text)
             elif extracted_text and extracted_text.startswith("[Warning]"):
@@ -502,7 +508,7 @@ elif mode == "🩺 Image Report":
             if extracted_text and not extracted_text.startswith("["):
                 st.success("✓ Text extracted from image.")
                 with st.expander("📝 OCR Extracted Text", expanded=False):
-                    st.text_area("", extracted_text, height=220)
+                    st.text_area("OCR Text", extracted_text, height=220, label_visibility="collapsed")
             elif extracted_text and extracted_text.startswith("[Error]"):
                 st.error(extracted_text)
             else:
