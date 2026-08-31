@@ -1,5 +1,4 @@
-Flask==3.0.3
-Werkzeug==3.0.3
+streamlit==1.35.0
 pandas==2.2.2
 numpy==1.26.4
 scikit-learn==1.5.0
@@ -11,5 +10,8 @@ mlxtend==0.23.1
 scipy==1.13.1
 openpyxl==3.1.4
 Pillow==10.0.0
-pytesseract==0.3.11
+pytesseract==0.3.13
 PyMuPDF==1.25.0
+reportlab==4.0.7
+matplotlib==3.8.4
+seaborn==0.13.2
