@@ -2,6 +2,13 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import time
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from utils.schema_analyzer import SchemaAnalyzer, ColumnType
+from utils.intelligent_analyzer import IntelligentAnalyzer
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -17,7 +24,8 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
     Trend Agent: Uses Prophet to forecast prescription trends over time.
     Falls back to rolling average trend if no date column found.
     """
-    result = {"status": "ok", "figures": [], "summary": ""}
+    start_time = time.perf_counter()
+    result = {"status": "ok", "figures": [], "summary": "", "metrics": {}}
 
     date_col = next((c for c, cat in col_map.items() if cat == "date" and c in df.columns), None)
     drug_col = next((c for c, cat in col_map.items() if cat == "drug_name" and c in df.columns), None)
@@ -29,13 +37,43 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
         _add_static_trend(df, col_map, result)
         return result
 
+    # Initialize intelligent analyzer for better data processing
+    intelligent_analyzer = IntelligentAnalyzer()
+    schema_analyzer = SchemaAnalyzer()
+    
     try:
         df_trend = df.copy()
-        df_trend["__date"] = pd.to_datetime(df_trend[date_col], errors="coerce")
+        print("Trend Agent: Performing intelligent data preprocessing...")
+        
+        # Process date column with intelligent detection
+        if date_col:
+            date_type = schema_analyzer.detect_column_type(df_trend[date_col], date_col)
+            if date_type == ColumnType.DATETIME:
+                df_trend["__date"] = pd.to_datetime(df_trend[date_col], errors="coerce")
+                print(f"  {date_col}: DateTime -> Processed safely")
+            else:
+                print(f"  {date_col}: Not detected as datetime, attempting conversion...")
+                df_trend["__date"] = pd.to_datetime(df_trend[date_col], errors="coerce")
+        
         df_trend = df_trend.dropna(subset=["__date"])
         
+        # Process quantity column with intelligent detection
         if qty_col:
-            df_trend[qty_col] = pd.to_numeric(df_trend[qty_col], errors="coerce").fillna(0)
+            qty_type = schema_analyzer.detect_column_type(df_trend[qty_col], qty_col)
+            if qty_type == ColumnType.NUMERICAL:
+                df_trend[qty_col] = pd.to_numeric(df_trend[qty_col], errors="coerce").fillna(0)
+                print(f"  {qty_col}: Numerical -> Processed safely")
+            else:
+                print(f"  {qty_col}: Not detected as numerical, attempting conversion...")
+                df_trend[qty_col] = pd.to_numeric(df_trend[qty_col], errors="coerce").fillna(0)
+        
+        # Process drug column with intelligent detection
+        if drug_col:
+            drug_type = schema_analyzer.detect_column_type(df_trend[drug_col], drug_col)
+            if drug_type == ColumnType.CATEGORICAL:
+                print(f"  {drug_col}: Categorical -> Processed safely")
+            else:
+                print(f"  {drug_col}: Not detected as categorical, using as-is")
 
         if len(df_trend) < 5:
             result["status"] = "insufficient_data"
@@ -98,6 +136,9 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
         overall_ts.columns = ["ds", "y"]
         overall_ts = overall_ts.dropna()
 
+        periods = 0
+        model_name = "Rolling Average"
+        rmse, mae = 0, 0
         if STATSMODELS_AVAILABLE and len(overall_ts) >= 10:
             try:
                 periods = {"D": 30, "W": 12, "MS": 6}.get(freq, 12)
@@ -106,12 +147,19 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
                 # Minimum data constraint for ETS
                 if len(overall_ts) >= 2 * seasonal_periods:
                     model = ExponentialSmoothing(overall_ts["y"], trend="add", seasonal="add", seasonal_periods=seasonal_periods)
+                    model_name = "Holt-Winters (S)"
                 else:
                     model = ExponentialSmoothing(overall_ts["y"], trend="add", seasonal=None)
+                    model_name = "Holt-Winters (T)"
                 
                 fit_model = model.fit(optimized=True)
                 forecast_vals = fit_model.forecast(periods)
                 
+                # Calculate fit metrics
+                fitted_vals = fit_model.fittedvalues
+                rmse = np.sqrt(mean_squared_error(overall_ts["y"], fitted_vals))
+                mae = mean_absolute_error(overall_ts["y"], fitted_vals)
+
                 # Build DS for forecast
                 last_date = overall_ts["ds"].iloc[-1]
                 if freq == "D":
@@ -163,6 +211,32 @@ def run_trend_agent(df: pd.DataFrame, col_map: dict) -> dict:
                 f"Trend analysis on {len(overall_ts)} time points.\n"
                 f"Prophet unavailable or insufficient data; showing rolling average trend."
             )
+
+        # Performance metrics
+        duration = (time.perf_counter() - start_time) * 1000
+        result["metrics"] = {
+            "RMSE": f"{rmse:.1f}",
+            "MAE": f"{mae:.1f}",
+            "Points": f"{len(overall_ts)}",
+            "Horizon": f"{periods}",
+            "Execution": f"{duration:.1f}ms",
+            "Model": model_name
+        }
+
+        # Store full trend results for CSV download
+        try:
+            if 'overall_ts' in locals() and overall_ts is not None:
+                trend_results_df = overall_ts.copy()
+                trend_results_df['type'] = 'actual'
+                
+                if 'forecast_vals' in locals() and forecast_vals is not None:
+                    future_df = pd.DataFrame({'ds': future_ds, 'y': forecast_vals})
+                    future_df['type'] = 'forecast'
+                    trend_results_df = pd.concat([trend_results_df, future_df], ignore_index=True)
+                
+                result["trend_df"] = trend_results_df
+        except Exception as e:
+            print(f"Warning: Could not generate trend DF: {e}")
 
     except Exception as e:
         result["status"] = "error"
@@ -216,4 +290,4 @@ def _add_static_trend(df: pd.DataFrame, col_map: dict, result: dict):
             font_color="#E8EAF0",
             showlegend=False,
         )
-        result["figures"].append(("Top Drugs by Volume", fig))
+        result["figures"].append(("Top Drugs by Volume", fig))

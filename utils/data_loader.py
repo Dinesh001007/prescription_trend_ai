@@ -3,14 +3,10 @@ import json
 import io
 
 
-def load_file(uploaded_file, filename=None) -> pd.DataFrame:
-    """Load CSV or JSON file uploaded via Streamlit or Flask."""
-    if filename is None:
-        name = uploaded_file.name.lower()
-        content = uploaded_file.read()
-    else:
-        name = filename.lower()
-        content = uploaded_file.read() if hasattr(uploaded_file, 'read') else uploaded_file
+def load_file(uploaded_file) -> pd.DataFrame:
+    """Load CSV or JSON file uploaded via Streamlit."""
+    name = uploaded_file.name.lower()
+    content = uploaded_file.read()
 
     if name.endswith(".csv"):
         df = pd.read_csv(io.BytesIO(content))
