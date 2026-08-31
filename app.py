@@ -349,7 +349,7 @@ with st.sidebar:
     run_trend = st.checkbox("Trend Forecasting (Holt-Winters)", value=True)
     run_pattern = st.checkbox("Co-Prescription Patterns", value=True)
 
-    st.markdown("### 🤖 Model")
+    st.markdown("### Model")
     st.markdown('<span class="pill">Phi-4 mini · Ollama</span>', unsafe_allow_html=True)
     if st.button("Test Ollama Connection"):
         resp = query_llm("Say 'OK' only.")
@@ -962,4 +962,4 @@ else:
                         context = f"Dataset context: {st.session_state.mapping_table.to_string()}\nInsights: {st.session_state.llm_insights}\nQuestion: {prompt}"
                         response = explain_analysis(context)
                         st.markdown(response)
-                        st.session_state.chat_history.append({"role": "assistant", "content": response})
+                        st.session_state.chat_history.append({"role": "assistant", "content": response})
