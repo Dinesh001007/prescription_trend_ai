@@ -7,8 +7,8 @@ import time
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.schema_analyzer import SchemaAnalyzer, ColumnType
-from utils.intelligent_analyzer import IntelligentAnalyzer
+from utils.data_profiling import SchemaAnalyzer, ColumnType
+from utils.core_pipeline import IntelligentAnalyzer
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -290,4 +290,4 @@ def _add_static_trend(df: pd.DataFrame, col_map: dict, result: dict):
             font_color="#E8EAF0",
             showlegend=False,
         )
-        result["figures"].append(("Top Drugs by Volume", fig))
+        result["figures"].append(("Top Drugs by Volume", fig))

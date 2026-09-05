@@ -1,0 +1,21 @@
+{
+  "include": [
+    "app.py",
+    "agents",
+    "api",
+    "tools",
+    "utils",
+    "tests"
+  ],
+  "exclude": [
+    "**/.venv",
+    "**/venv",
+    "**/__pycache__",
+    "**/site-packages"
+  ],
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": false,
+  "reportGeneralTypeIssues": "none",
+  "reportOptionalMemberAccess": "none",
+  "pythonVersion": "3.12"
+}

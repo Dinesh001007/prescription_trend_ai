@@ -14,8 +14,8 @@ import time
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.schema_analyzer import SchemaAnalyzer, ColumnType
-from utils.intelligent_analyzer import IntelligentAnalyzer
+from utils.data_profiling import SchemaAnalyzer, ColumnType
+from utils.core_pipeline import IntelligentAnalyzer
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -662,7 +662,7 @@ class HealthcareAnomalyDetector:
             template="plotly_dark",
             showlegend=False
         )
-        figures.append(("Performance Metrics", fig_stats))
+        # Performance metrics are retained in metrics dictionary
         
         return figures
 

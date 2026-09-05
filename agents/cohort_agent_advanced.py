@@ -25,8 +25,8 @@ import time
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.schema_analyzer import SchemaAnalyzer, ColumnType
-from utils.intelligent_analyzer import IntelligentAnalyzer
+from utils.data_profiling import SchemaAnalyzer, ColumnType
+from utils.core_pipeline import IntelligentAnalyzer
 from utils.agent_performance_validator import validate_agent_performance
 import warnings
 warnings.filterwarnings('ignore')
@@ -642,7 +642,7 @@ class AdvancedCohortAnalyzer:
                 height=600,
                 showlegend=False
             )
-            figures.append(("Algorithm Comparison", fig_comparison))
+            # Algorithm comparison is kept in metadata rather than dataset figure output
         
         # 5. Feature Importance by Cluster
         if hasattr(self, 'selected_features') and len(self.selected_features) > 0:
@@ -1003,11 +1003,9 @@ def run_cohort_agent_advanced(df: pd.DataFrame, col_map: dict) -> dict:
             validation_results = validate_agent_performance(mock_results, alpha=0.05)
             
             # Note: Statistical validation table is generated for PDF report only, not displayed in UI
-            # Validation data is stored in result['statistical_validation'] for PDF generation
-            
-            # Add validation summary visualization
+            # Validation data is stored in result['statistical_validation'] for PDF generation and metadata
             if 'validation_figure' in validation_results:
-                figures.append(("Agent Performance Validation Summary", validation_results['validation_figure']))
+                result['validation_figure'] = validation_results['validation_figure']
             
             # Update summary with agent performance validation
             if validation_results and 'validation_results' in validation_results:

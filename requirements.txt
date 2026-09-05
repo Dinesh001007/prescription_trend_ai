@@ -9,9 +9,15 @@ requests==2.32.2
 mlxtend==0.23.1
 scipy==1.13.1
 openpyxl==3.1.4
-Pillow==10.0.0
+Pillow==10.4.0
 pytesseract==0.3.13
+winocr>=0.0.15
 PyMuPDF==1.25.0
 reportlab==4.0.7
 matplotlib==3.8.4
 seaborn==0.13.2
+fastapi>=0.110.0
+uvicorn>=0.29.0
+pydantic>=2.7.0
+python-multipart>=0.0.9
+statsmodels>=0.14.0

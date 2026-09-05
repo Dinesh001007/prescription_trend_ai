@@ -8,8 +8,8 @@ import time
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.schema_analyzer import SchemaAnalyzer, ColumnType
-from utils.intelligent_analyzer import IntelligentAnalyzer
+from utils.data_profiling import SchemaAnalyzer, ColumnType
+from utils.core_pipeline import IntelligentAnalyzer
 
 
 def run_pattern_agent(df: pd.DataFrame, col_map: dict) -> dict:

@@ -100,15 +100,80 @@ def init_db():
     )
     """)
 
+    # 7. Learned column meanings shared across future dataset uploads
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS column_meanings (
+        signature TEXT PRIMARY KEY,
+        column_name TEXT NOT NULL,
+        canonical TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.0,
+        meaning TEXT DEFAULT '',
+        usage TEXT DEFAULT '',
+        source TEXT DEFAULT 'feedback',
+        confirmations INTEGER NOT NULL DEFAULT 1,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     # Create Indexes for fast querying
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at ASC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_memories_user ON user_memories(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_sessions_user ON analysis_sessions(user_id, session_type, updated_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_messages_session ON analysis_messages(session_id, created_at ASC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_column_meanings_name ON column_meanings(column_name)")
 
     conn.commit()
     conn.close()
+
+
+def get_column_meaning(signature: str) -> Optional[Dict[str, Any]]:
+    """Return the strongest learned meaning for a normalized column signature."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT signature, column_name, canonical, confidence, meaning, usage, source, confirmations, updated_at "
+            "FROM column_meanings WHERE signature = ?",
+            (signature,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def save_column_meaning(
+    signature: str,
+    column_name: str,
+    canonical: str,
+    confidence: float,
+    meaning: str = "",
+    usage: str = "",
+    source: str = "feedback",
+) -> None:
+    """Upsert a learned meaning; explicit feedback is allowed to override guesses."""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO column_meanings
+                (signature, column_name, canonical, confidence, meaning, usage, source, confirmations, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(signature) DO UPDATE SET
+                column_name = excluded.column_name,
+                canonical = CASE WHEN excluded.source = 'feedback' THEN excluded.canonical ELSE column_meanings.canonical END,
+                confidence = CASE WHEN excluded.source = 'feedback' THEN excluded.confidence
+                                  ELSE MAX(column_meanings.confidence, excluded.confidence) END,
+                meaning = CASE WHEN excluded.meaning != '' THEN excluded.meaning ELSE column_meanings.meaning END,
+                usage = CASE WHEN excluded.usage != '' THEN excluded.usage ELSE column_meanings.usage END,
+                source = CASE WHEN excluded.source = 'feedback' THEN excluded.source ELSE column_meanings.source END,
+                confirmations = column_meanings.confirmations + 1,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (signature, column_name, canonical, confidence, meaning, usage, source),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ─── Password Security ────────────────────────────────────────────────────────

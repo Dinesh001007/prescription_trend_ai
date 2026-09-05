@@ -21,13 +21,14 @@ from utils.db import (
     add_analysis_message,
     get_analysis_messages,
 )
-from utils.llm import (
+from utils.llm_core import (
     query_llm,
     get_drug_info,
     identify_columns,
     generate_insights,
     explain_analysis,
     analyze_image_report,
+    detect_scan_modality,
     explain_image_report,
     generate_pdf_executive_summary,
     is_ollama_running,
@@ -50,19 +51,24 @@ from agents.cohort_agent_advanced import run_cohort_agent_advanced as run_cohort
 from agents.anomaly_agent_improved import run_anomaly_agent_improved as run_anomaly_agent
 from agents.trend_agent import run_trend_agent
 from agents.pattern_agent import run_pattern_agent
-from utils.image_utils import (
+from utils.media_utils import (
     is_image_file,
     is_pdf_file,
     load_image_from_bytes,
     extract_text_from_file,
 )
-from utils.pdf_generator import (
+from utils.media_utils import (
     generate_pdf_report,
-    create_visualizations_pdf,
 )
-from utils.schema_analyzer import SchemaAnalyzer, ColumnType
-from utils.intelligent_analyzer import IntelligentAnalyzer
-from utils.medical_pipeline import MedicalDataPipeline
+from utils.data_profiling import SchemaAnalyzer, ColumnType
+from utils.core_pipeline import IntelligentAnalyzer
+from utils.core_pipeline import MedicalDataPipeline
+from utils.data_profiling import DatasetProfiler
+from utils.data_profiling import SemanticMapper
+from utils.core_pipeline import CapabilityMatrix
+from utils.core_pipeline import AgentOrchestrator
+from utils.llm_core import AIReasoner
+from tools.tool_registry import ToolRegistry
 
 # Initialize database tables on startup
 init_db()
@@ -500,6 +506,24 @@ with col_top_right:
 
 
 # ─── Helper: Session State Loaders ───────────────────────────────────────────
+def render_agent_figures(agent_name: str, title: str = None):
+    """Render all Plotly figures produced by a specific agent, if available."""
+    result = st.session_state.analysis_results.get(agent_name, {})
+    figures = result.get("figures") or []
+    if not figures:
+        return
+
+    st.markdown(f"##### {title or agent_name.title()} Visuals")
+    for i in range(0, len(figures), 2):
+        cols = st.columns(2)
+        for j in range(2):
+            if i + j < len(figures):
+                fig_title, fig = figures[i + j]
+                with cols[j]:
+                    st.markdown(f"**{fig_title}**")
+                    st.plotly_chart(fig, use_container_width=True)
+
+
 def load_dataset_session_state(session_id: str, user_id: int):
     session = get_analysis_session(session_id, user_id)
     if not session:
@@ -787,12 +811,60 @@ if app_mode == "📂 Dataset Analysis":
                 st.session_state.eval_metrics = {}
                 st.session_state.analysis_done = False
                 st.session_state["last_file"] = uploaded_file.name
+                
+                # Profile dataset dynamically
+                profiler = DatasetProfiler()
+                prof = profiler.profile_dataframe(df, filename=uploaded_file.name)
+                st.session_state.dataset_profile = prof
+                
+                # Layered semantic mapping
+                mapper = SemanticMapper()
+                mapping_res = mapper.map_columns(df, prof.get("columns", {}), use_llm=False)
+                st.session_state.canonical_map = mapping_res["canonical_mapping"]
+                st.session_state.mapping_details = mapping_res["mapping_details"]
+                
+                # Capability Matrix
+                cap_eval = CapabilityMatrix()
+                st.session_state.capabilities = cap_eval.evaluate_capabilities(st.session_state.canonical_map, prof)
+
                 update_analysis_session_data(active_session["id"], title=f"Dataset: {uploaded_file.name}", filename=uploaded_file.name)
-                st.success(f"✓ Loaded {uploaded_file.name} ({df.shape[0]:,} records, {df.shape[1]} columns)")
+                st.success(f"✓ Ingested {uploaded_file.name} ({df.shape[0]:,} rows, {df.shape[1]} columns) — Data Quality Score: {prof['data_quality_score']}/100")
             except Exception as e:
                 st.error(f"Failed to parse file: {e}")
 
     df = st.session_state.df
+    
+    # Render Profiling & Capability Banner if dataset is present
+    if df is not None and "dataset_profile" in st.session_state:
+        prof = st.session_state.dataset_profile
+        caps = st.session_state.get("capabilities", {})
+        
+        st.markdown(f"""
+        <div style="background:#0D111A; border:1px solid #1C263A; border-radius:12px; padding:14px; margin-top:10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-weight:700; font-size:14px; color:#F0F3F8;">📋 Automated Dataset Health & Capability Matrix</span>
+                <span class="chip-green">Quality Score: {prof.get('data_quality_score', 100)}/100</span>
+            </div>
+            <div style="font-size:12px; color:#94A3B8; margin-bottom:10px;">
+                <strong>Dimensions:</strong> {prof.get('row_count', len(df)):,} rows · {prof.get('column_count', len(df.columns))} columns · Missing Cells: {prof.get('missing_rate_pct', 0.0)}% · Duplicate Rows: {prof.get('duplicate_row_count', 0)}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Capability badges
+        cap_cols = st.columns(5)
+        cap_dict = caps.get("capabilities", {})
+        tool_names = ["trend", "cohort", "risk", "anomaly", "pattern"]
+        tool_icons = {"trend": "📈 Trend", "cohort": "👥 Cohort", "risk": "⚠️ Risk", "anomaly": "🔍 Anomaly", "pattern": "🧩 Pattern"}
+        
+        for idx, t_name in enumerate(tool_names):
+            with cap_cols[idx]:
+                c_info = cap_dict.get(t_name, {})
+                if c_info.get("feasible", False):
+                    st.success(f"{tool_icons[t_name]}\n\n✓ Ready")
+                else:
+                    st.warning(f"{tool_icons[t_name]}\n\nUnavailable")
+
     st.markdown("</div>", unsafe_allow_html=True)
 
     if df is None:
@@ -804,100 +876,95 @@ if app_mode == "📂 Dataset Analysis":
             <div class="action-card-header">
                 <div class="action-card-title">
                     <span class="step-badge">2</span>
-                    Multi-Agent Clinical Pipeline Configuration
+                    Dynamic AI-Agent Planner & Multi-Model Execution
                 </div>
-                <span class="chip-blue">5 Specialized Medical AI Agents</span>
+                <span class="chip-blue">Dynamic Tool Orchestrator</span>
             </div>
         """, unsafe_allow_html=True)
 
+        user_analysis_query = st.text_input(
+            "💬 Clinical Query / Intent Directive (Optional)",
+            value="Perform comprehensive multi-model prescription trend, risk, and anomaly analysis.",
+            help="The AI Supervisor dynamically evaluates capabilities, plans DAG stages, and runs tool competitions."
+        )
+
         col_ag1, col_ag2, col_ag3 = st.columns(3)
         with col_ag1:
-            run_risk = st.checkbox("⚠️ **Risk Agent** (XGBoost Patient Risk)", value=True, help="Stratifies patients by predicted adverse prescription outcomes.")
-            run_cohort = st.checkbox("👥 **Cohort Agent** (KMeans Clustering)", value=True, help="Discovers distinct patient phenotype subgroups.")
+            run_risk = st.checkbox("⚠️ **Risk Tool** (XGBoost / Composite)", value=True)
+            run_cohort = st.checkbox("👥 **Cohort Tool** (KMeans / DBSCAN / Agglom)", value=True)
         with col_ag2:
-            run_anomaly = st.checkbox("🔍 **Anomaly Agent** (Isolation Forest)", value=True, help="Detects atypical prescribing patterns and dosage outliers.")
-            run_trend = st.checkbox("📈 **Trend Agent** (Holt-Winters)", value=True, help="Forecasts temporal prescription trajectory.")
+            run_anomaly = st.checkbox("🔍 **Anomaly Tool** (Isolation Forest / LOF / OCSVM)", value=True)
+            run_trend = st.checkbox("📈 **Trend Tool** (Prophet / ETS / ARIMA)", value=True)
         with col_ag3:
-            run_pattern = st.checkbox("🧩 **Pattern Agent** (Apriori Rules)", value=True, help="Mines frequent co-prescription associations and drug interactions.")
+            run_pattern = st.checkbox("🧩 **Pattern Tool** (Association & Polypharmacy)", value=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Execute Autonomous Multi-Agent Pipeline", use_container_width=True, key="btn_run_pipeline", type="primary"):
-            st.session_state.pipeline = MedicalDataPipeline(df)
-            
-            with st.spinner("Step 1: Mapping schema ontology and clinical semantics..."):
-                st.session_state.mapping_table = st.session_state.pipeline.step1_column_understanding()
+        if st.button("🚀 Launch Dynamic AI Multi-Agent Pipeline", use_container_width=True, key="btn_run_pipeline", type="primary"):
+            # Ensure profiling & capabilities are current
+            if "dataset_profile" not in st.session_state:
+                profiler = DatasetProfiler()
+                st.session_state.dataset_profile = profiler.profile_dataframe(df)
+            if "canonical_map" not in st.session_state:
+                mapper = SemanticMapper()
+                mapping_res = mapper.map_columns(df, st.session_state.dataset_profile.get("columns", {}), use_llm=False)
+                st.session_state.canonical_map = mapping_res["canonical_mapping"]
+                st.session_state.mapping_details = mapping_res["mapping_details"]
+            if "capabilities" not in st.session_state:
+                cap_eval = CapabilityMatrix()
+                st.session_state.capabilities = cap_eval.evaluate_capabilities(st.session_state.canonical_map, st.session_state.dataset_profile)
 
-            with st.spinner("Step 2: Performing automated data quality checks and feature engineering..."):
-                prep_res = st.session_state.pipeline.step2_preprocessing()
-                st.session_state.preprocessing_log = prep_res["preprocessing_log"]
+            orchestrator = AgentOrchestrator()
+            reasoner = AIReasoner()
 
-            agents_config = {
-                "risk": run_risk,
-                "cohort": run_cohort,
-                "anomaly": run_anomaly,
-                "trend": run_trend,
-                "pattern": run_pattern
-            }
-            with st.spinner("Step 3: Running specialized machine learning agents (Risk, Cohort, Anomaly, Trend, Pattern)..."):
-                results = st.session_state.pipeline.step3_agent_execution(agents_config)
-                st.session_state.analysis_results = results
+            with st.spinner("🤖 AI Supervisor: Formulating DAG execution plan..."):
+                plan = orchestrator.plan_execution(user_analysis_query, st.session_state.capabilities)
+                st.session_state.execution_plan = plan
 
-            with st.spinner("Step 4: Evaluating statistical validation metrics..."):
-                st.session_state.eval_metrics = st.session_state.pipeline.step4_evaluation(st.session_state.analysis_results)
+            with st.spinner("⚡ Running candidate model competitions concurrently (Holdout validation & metric rankings)..."):
+                exec_result = orchestrator.execute_plan(df, st.session_state.canonical_map, plan)
+                st.session_state.analysis_results = exec_result["tool_results"]
+                st.session_state.total_duration_ms = exec_result["total_duration_ms"]
 
-            with st.spinner("Step 5: Phi-4 mini synthesizing comprehensive clinical insights..."):
-                summaries = []
-                for key, res in results.items():
-                    summaries.append(f"[{key.upper()} AGENT]: {res.get('summary', '')}")
-                overall_summary = f"MEDICAL DATASET ANALYSIS\n{df.shape}\n" + "\n\n" + "\n".join(summaries)
-                llm_insights = generate_insights(overall_summary, {})
-                st.session_state.llm_insights = llm_insights
-                st.session_state.pdf_summary = generate_pdf_executive_summary(overall_summary)
+            with st.spinner("🔬 Evidence-Grounded AI Reasoning Agent: Synthesizing clinical intelligence report..."):
+                synthesis = reasoner.synthesize_findings(
+                    query=user_analysis_query,
+                    tool_results=st.session_state.analysis_results,
+                    canonical_map=st.session_state.canonical_map,
+                    dataset_profile=st.session_state.dataset_profile
+                )
+                st.session_state.llm_insights = synthesis
+                st.session_state.pdf_summary = synthesis
 
             st.session_state.analysis_done = True
-
-            # Save full session state to SQLite
-            mapping_data = st.session_state.mapping_table.to_dict(orient="records") if hasattr(st.session_state.mapping_table, "to_dict") else None
-            df_records = df.head(300).to_dict(orient="records") if df is not None else None
-            serializable_results = {}
-            for k, v in results.items():
-                serializable_results[k] = {
-                    "summary": v.get("summary", ""),
-                    "metrics": v.get("metrics", {}),
-                    "status": v.get("status", "")
-                }
             
-            # Clean eval_metrics to ensure all nested structures are serializable
-            clean_eval_metrics = {}
-            if isinstance(st.session_state.eval_metrics, dict):
-                for k, v in st.session_state.eval_metrics.items():
-                    if k == "statistical_validation" and isinstance(v, dict):
-                        val_res = v.get("validation_results", {})
-                        if isinstance(val_res, dict):
-                            clean_eval_metrics[k] = {"summary_report": val_res.get("summary_report", "")}
-                        else:
-                            clean_eval_metrics[k] = {"summary_report": str(val_res)}
-                    elif hasattr(v, "to_dict"):
-                        try:
-                            clean_eval_metrics[k] = v.to_dict()
-                        except Exception:
-                            clean_eval_metrics[k] = str(v)
-                    else:
-                        clean_eval_metrics[k] = v
+            # Create clean serializable version for SQLite persistence
+            serializable_results = {}
+            for k, v in st.session_state.analysis_results.items():
+                if isinstance(v, dict):
+                    serializable_results[k] = {
+                        "tool": v.get("tool", k),
+                        "model": v.get("model", ""),
+                        "status": v.get("status", ""),
+                        "summary": v.get("summary", ""),
+                        "metrics": v.get("metrics", {}),
+                        "findings": v.get("findings", []),
+                        "evidence": v.get("evidence", []),
+                        "leaderboard": v.get("leaderboard", [])
+                    }
+                else:
+                    serializable_results[k] = str(v)
 
-            payload = {
-                "analysis_done": True,
-                "row_count": df.shape[0],
-                "col_count": df.shape[1],
-                "mapping_table": mapping_data,
-                "preprocessing_log": st.session_state.preprocessing_log,
-                "analysis_results": serializable_results,
-                "eval_metrics": clean_eval_metrics,
-                "llm_insights": st.session_state.llm_insights,
-                "pdf_summary": st.session_state.pdf_summary,
-                "dataset_records": df_records
-            }
-            update_analysis_session_data(active_session["id"], data_dict=payload)
+            update_analysis_session_data(
+                active_session["id"],
+                data_dict={
+                    "analysis_done": True,
+                    "row_count": df.shape[0],
+                    "col_count": df.shape[1],
+                    "canonical_map": st.session_state.canonical_map,
+                    "analysis_results": serializable_results,
+                    "llm_insights": st.session_state.llm_insights
+                }
+            )
             st.rerun()
 
         st.markdown("</div>", unsafe_allow_html=True)
@@ -909,7 +976,7 @@ if app_mode == "📂 Dataset Analysis":
                 <div class="action-card-header">
                     <div class="action-card-title">
                         <span class="step-badge">3</span>
-                        Clinical Intelligence Findings & Visualizations
+                        Clinical Intelligence Findings & Dynamic Model Selection Leaderboard
                     </div>
                     <span class="step-pill-done">Analysis Verified ✓</span>
                 </div>
@@ -948,7 +1015,8 @@ if app_mode == "📂 Dataset Analysis":
                     st.session_state.col_map,
                     st.session_state.analysis_results,
                     st.session_state.llm_insights,
-                    dynamic_summary=st.session_state.get("pdf_summary")
+                    dynamic_summary=st.session_state.get("pdf_summary"),
+                    mapping_details=st.session_state.get("mapping_details")
                 )
                 st.download_button(
                     label="📥 Export Full Clinical PDF Report",
@@ -964,7 +1032,8 @@ if app_mode == "📂 Dataset Analysis":
             # ── Detailed Report Tabs ──
             tabs = st.tabs([
                 "📊 Summary & Data", 
-                "🧬 Medical Schema", 
+                "🧬 Canonical Schema & Evidence",
+                "🏆 Dynamic Model Selection",
                 "⚠️ Risk Stratification", 
                 "👥 Cohort Phenotypes", 
                 "🔍 Anomaly Detection", 
@@ -978,80 +1047,244 @@ if app_mode == "📂 Dataset Analysis":
                 st.dataframe(df.head(100), use_container_width=True)
 
             with tabs[1]:
-                st.markdown("##### 🧬 Schema Classification & Medical Ontology")
-                if st.session_state.mapping_table is not None:
+                st.markdown("##### 🧬 Canonical Semantic Schema & Detection Evidence")
+                if "mapping_details" in st.session_state and st.session_state.mapping_details:
+                    map_rows = []
+                    for col_name, d in st.session_state.mapping_details.items():
+                        conf_pct = int(d.get("confidence", 0.0) * 100)
+                        map_rows.append({
+                            "Dataset Column": col_name,
+                            "Canonical Concept": d.get("canonical", "OTHER"),
+                            "Mapping Confidence": f"{conf_pct}%",
+                            "Inference Layer": d.get("layer", ""),
+                            "Detection Evidence": d.get("evidence", "")
+                        })
+                    st.dataframe(pd.DataFrame(map_rows), use_container_width=True)
+                elif st.session_state.mapping_table is not None:
                     st.dataframe(st.session_state.mapping_table, use_container_width=True)
-                if st.session_state.preprocessing_log:
-                    with st.expander("Data Quality & Cleaning Log", expanded=True):
-                        for log in st.session_state.preprocessing_log:
-                            st.write(f"• {log}")
+
+            def create_model_performance_chart(tool_name: str, leaderboard: list, winner_name: str = ""):
+                """Generates an interactive Plotly benchmark bar chart comparing candidate model performance."""
+                if not leaderboard or not isinstance(leaderboard, list):
+                    return None
+                
+                valid_records = [c for c in leaderboard if isinstance(c, dict) and c.get("valid", False)]
+                if not valid_records:
+                    valid_records = [c for c in leaderboard if isinstance(c, dict)]
+                
+                if not valid_records:
+                    return None
+                
+                df_board = pd.DataFrame(valid_records)
+                tool_key = tool_name.lower()
+                
+                try:
+                    # 1. Trend Tool
+                    if "trend" in tool_key and "rmse" in df_board.columns:
+                        plot_df = df_board[df_board["rmse"].fillna(999999) < 90000].copy()
+                        if plot_df.empty:
+                            plot_df = df_board.copy()
+                        
+                        fig = px.bar(
+                            plot_df, x="model", y="rmse",
+                            color="is_winner" if "is_winner" in plot_df.columns else None,
+                            title=f"🏆 {tool_name.upper()} Model Holdout Validation Error (RMSE — Lower is Better)",
+                            template="plotly_dark",
+                            color_discrete_map={True: "#00E5BE", False: "#3B82F6"} if "is_winner" in plot_df.columns else None,
+                            text=plot_df["rmse"].round(2)
+                        )
+                        fig.update_layout(
+                            paper_bgcolor="#0D111A", plot_bgcolor="#090C10",
+                            xaxis_title="Forecasting Algorithm", yaxis_title="Holdout RMSE",
+                            font=dict(family="Plus Jakarta Sans, DM Sans, sans-serif"),
+                            showlegend=False,
+                            height=320
+                        )
+                        return fig
+
+                    # 2. Cohort Tool
+                    elif "cohort" in tool_key and "silhouette_score" in df_board.columns:
+                        plot_df = df_board[df_board["silhouette_score"].notna()].copy()
+                        if not plot_df.empty:
+                            fig = px.bar(
+                                plot_df, x="model", y="silhouette_score",
+                                color="is_winner" if "is_winner" in plot_df.columns else None,
+                                title=f"🏆 {tool_name.upper()} Model Clustering Quality (Silhouette Score — Higher is Better)",
+                                template="plotly_dark",
+                                color_discrete_map={True: "#00E5BE", False: "#3B82F6"} if "is_winner" in plot_df.columns else None,
+                                text=plot_df["silhouette_score"].round(3)
+                            )
+                            fig.update_layout(
+                                paper_bgcolor="#0D111A", plot_bgcolor="#090C10",
+                                xaxis_title="Clustering Algorithm", yaxis_title="Silhouette Score",
+                                font=dict(family="Plus Jakarta Sans, DM Sans, sans-serif"),
+                                showlegend=False,
+                                height=320
+                            )
+                            return fig
+
+                    # 3. Anomaly Tool
+                    elif "anomaly" in tool_key and "separation_score" in df_board.columns:
+                        plot_df = df_board[df_board["separation_score"].notna()].copy()
+                        if not plot_df.empty:
+                            fig = px.bar(
+                                plot_df, x="model", y="separation_score",
+                                color="is_winner" if "is_winner" in plot_df.columns else None,
+                                title=f"🏆 {tool_name.upper()} Anomaly Separation Contrast (Z-Score Contrast — Higher is Better)",
+                                template="plotly_dark",
+                                color_discrete_map={True: "#00E5BE", False: "#3B82F6"} if "is_winner" in plot_df.columns else None,
+                                text=plot_df["separation_score"].round(2)
+                            )
+                            fig.update_layout(
+                                paper_bgcolor="#0D111A", plot_bgcolor="#090C10",
+                                xaxis_title="Anomaly Algorithm", yaxis_title="Separation Contrast (SD)",
+                                font=dict(family="Plus Jakarta Sans, DM Sans, sans-serif"),
+                                showlegend=False,
+                                height=320
+                            )
+                            return fig
+
+                    # 4. Risk Tool
+                    elif "risk" in tool_key:
+                        if "roc_auc" in df_board.columns and df_board["roc_auc"].notna().any():
+                            metrics_to_plot = [m for m in ["roc_auc", "f1_score", "accuracy"] if m in df_board.columns and df_board[m].notna().any()]
+                            if len(metrics_to_plot) > 1:
+                                melted = pd.melt(df_board, id_vars=["model"], value_vars=metrics_to_plot, var_name="Metric", value_name="Score")
+                                fig = px.bar(
+                                    melted, x="model", y="Score", color="Metric",
+                                    barmode="group",
+                                    title=f"🏆 {tool_name.upper()} Supervised Classifier Holdout Benchmark (Multi-Metric)",
+                                    template="plotly_dark",
+                                    color_discrete_sequence=["#00E5BE", "#0A84FF", "#F59E0B"]
+                                )
+                            else:
+                                fig = px.bar(
+                                    df_board, x="model", y="roc_auc",
+                                    color="is_winner" if "is_winner" in df_board.columns else None,
+                                    title=f"🏆 {tool_name.upper()} Classifier Benchmark (ROC-AUC — Higher is Better)",
+                                    template="plotly_dark",
+                                    color_discrete_map={True: "#00E5BE", False: "#3B82F6"} if "is_winner" in df_board.columns else None,
+                                    text=df_board["roc_auc"].round(3)
+                                )
+                            fig.update_layout(
+                                paper_bgcolor="#0D111A", plot_bgcolor="#090C10",
+                                xaxis_title="Classifier Algorithm", yaxis_title="Test Score (0 - 1.0)",
+                                font=dict(family="Plus Jakarta Sans, DM Sans, sans-serif"),
+                                height=320
+                            )
+                            return fig
+
+                    # Generic numeric metric fallback
+                    num_cols = df_board.select_dtypes(include=[np.number]).columns.tolist()
+                    num_cols = [c for c in num_cols if c not in ["valid", "is_winner"]]
+                    if num_cols and len(df_board) > 0:
+                        primary_col = num_cols[0]
+                        fig = px.bar(
+                            df_board, x="model", y=primary_col,
+                            color="is_winner" if "is_winner" in df_board.columns else None,
+                            title=f"🏆 {tool_name.upper()} Evaluation Benchmark ({primary_col})",
+                            template="plotly_dark",
+                            color_discrete_map={True: "#00E5BE", False: "#3B82F6"} if "is_winner" in df_board.columns else None
+                        )
+                        fig.update_layout(
+                            paper_bgcolor="#0D111A", plot_bgcolor="#090C10",
+                            font=dict(family="Plus Jakarta Sans, DM Sans, sans-serif"),
+                            showlegend=False,
+                            height=320
+                        )
+                        return fig
+                except Exception:
+                    return None
+                return None
 
             with tabs[2]:
+                st.markdown("##### 🏆 Dynamic Model Selection Leaderboard & Validation Evidence")
+                st.markdown("<p style='font-size:13px; color:#94A3B8;'>Objective mathematical evaluation scores determine the best performing algorithm for each tool — no guesswork.</p>", unsafe_allow_html=True)
+                
+                for t_name, res in st.session_state.analysis_results.items():
+                    if isinstance(res, dict) and "leaderboard" in res and res["leaderboard"]:
+                        st.markdown(f"**Tool: `{t_name.upper()}`** — Winning Model: `{res.get('model', 'Winner')}` (Execution: {res.get('execution_time_ms', 0.0)}ms)")
+                        st.dataframe(pd.DataFrame(res["leaderboard"]), use_container_width=True)
+                        if res.get("evidence"):
+                            st.info("📌 **Selection Evidence:** " + " · ".join(res["evidence"]))
+                        
+                        # Render visual model performance comparison chart
+                        perf_fig = create_model_performance_chart(t_name, res["leaderboard"], res.get("model", ""))
+                        if perf_fig is not None:
+                            st.plotly_chart(perf_fig, use_container_width=True)
+                        
+                        st.markdown("---")
+
+            def render_tool_figures(figs):
+                if not figs:
+                    return
+                for i in range(0, len(figs), 2):
+                    cols = st.columns(2)
+                    for j in range(2):
+                        if i + j < len(figs):
+                            item = figs[i+j]
+                            if isinstance(item, (list, tuple)) and len(item) == 2:
+                                title, fig = item
+                            else:
+                                title, fig = "Visualization", item
+                            with cols[j]:
+                                st.plotly_chart(fig, use_container_width=True)
+
+            with tabs[3]:
                 if "risk" in st.session_state.analysis_results:
                     res = st.session_state.analysis_results["risk"]
                     st.markdown(res.get("summary", ""))
-                    figs = res.get("figures", [])
-                    for i in range(0, len(figs), 2):
-                        cols = st.columns(2)
-                        for j in range(2):
-                            if i + j < len(figs):
-                                title, fig = figs[i+j]
-                                with cols[j]:
-                                    st.plotly_chart(fig, use_container_width=True)
+                    render_tool_figures(res.get("figures", []))
 
-            with tabs[3]:
+            with tabs[4]:
                 if "cohort" in st.session_state.analysis_results:
                     res = st.session_state.analysis_results["cohort"]
                     st.markdown(res.get("summary", ""))
-                    figs = res.get("figures", [])
-                    for i in range(0, len(figs), 2):
-                        cols = st.columns(2)
-                        for j in range(2):
-                            if i + j < len(figs):
-                                title, fig = figs[i+j]
-                                with cols[j]:
-                                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Display structured phenotype characteristics table if available
+                    c_profiles = res.get("data", {}).get("cohort_profiles", [])
+                    if c_profiles:
+                        st.markdown("##### 🧬 Discovered Patient Phenotype Characteristics")
+                        table_rows = []
+                        for cp in c_profiles:
+                            row = {
+                                "Phenotype Cohort": cp.get("cohort", ""),
+                                "Patient Count": f"{cp.get('patient_count', 0):,}",
+                                "Cohort Share": cp.get("percentage", "")
+                            }
+                            traits = cp.get("traits", {})
+                            if "mean_age" in traits: row["Mean Age"] = f"{traits['mean_age']} yrs"
+                            if "primary_drug" in traits: row["Dominant Medication"] = traits["primary_drug"]
+                            if "mean_quantity" in traits: row["Avg Units"] = str(traits["mean_quantity"])
+                            if "common_dosage" in traits: row["Typical Dose"] = str(traits["common_dosage"])
+                            if "risk_index" in traits: row["Risk Index"] = str(traits["risk_index"])
+                            if "primary_diagnosis" in traits: row["Primary Diagnosis"] = str(traits["primary_diagnosis"])
+                            if "dominant_gender" in traits: row["Gender Breakdown"] = str(traits["dominant_gender"])
+                            table_rows.append(row)
+                        if table_rows:
+                            st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
 
-            with tabs[4]:
+                    render_tool_figures(res.get("figures", []))
+
+            with tabs[5]:
                 if "anomaly" in st.session_state.analysis_results:
                     res = st.session_state.analysis_results["anomaly"]
                     st.markdown(res.get("summary", ""))
-                    figs = res.get("figures", [])
-                    for i in range(0, len(figs), 2):
-                        cols = st.columns(2)
-                        for j in range(2):
-                            if i + j < len(figs):
-                                title, fig = figs[i+j]
-                                with cols[j]:
-                                    st.plotly_chart(fig, use_container_width=True)
+                    render_tool_figures(res.get("figures", []))
 
-            with tabs[5]:
+            with tabs[6]:
                 if "pattern" in st.session_state.analysis_results:
                     res = st.session_state.analysis_results["pattern"]
                     st.markdown(res.get("summary", ""))
-                    figs = res.get("figures", [])
-                    for i in range(0, len(figs), 2):
-                        cols = st.columns(2)
-                        for j in range(2):
-                            if i + j < len(figs):
-                                title, fig = figs[i+j]
-                                with cols[j]:
-                                    st.plotly_chart(fig, use_container_width=True)
+                    render_tool_figures(res.get("figures", []))
 
-            with tabs[6]:
+            with tabs[7]:
                 if "trend" in st.session_state.analysis_results:
                     res = st.session_state.analysis_results["trend"]
                     st.markdown(res.get("summary", "Temporal trend analysis complete."))
-                    figs = res.get("figures", [])
-                    for i in range(0, len(figs), 2):
-                        cols = st.columns(2)
-                        for j in range(2):
-                            if i + j < len(figs):
-                                title, fig = figs[i+j]
-                                with cols[j]:
-                                    st.plotly_chart(fig, use_container_width=True)
+                    render_tool_figures(res.get("figures", []))
 
-            with tabs[7]:
+            with tabs[8]:
                 st.markdown('<div class="insight-container">', unsafe_allow_html=True)
                 st.markdown(st.session_state.llm_insights)
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -1103,12 +1336,22 @@ if app_mode == "📂 Dataset Analysis":
 
                 with st.chat_message("assistant"):
                     with st.spinner("Analyzing dataset findings with clinical intelligence..."):
+                        findings_context = []
+                        for tool_k, tool_v in st.session_state.analysis_results.items():
+                            if isinstance(tool_v, dict):
+                                tool_findings = tool_v.get("findings", [])
+                                if tool_findings:
+                                    findings_context.append(f"[{tool_k.upper()} FINDINGS]:\n" + "\n".join([f"• {f}" for f in tool_findings]))
+
+                        detailed_evidence = "\n\n".join(findings_context)
+
                         context_prompt = (
                             f"Dataset: {active_session.get('filename', 'Medical Dataset')}\n"
-                            f"Shape: {df.shape}\n"
+                            f"Shape: {df.shape[0]} rows, {df.shape[1]} columns\n"
                             f"Executive Insights:\n{st.session_state.llm_insights}\n\n"
+                            f"Detailed Multi-Agent Tool Findings & Discovered Cluster Profiles:\n{detailed_evidence}\n\n"
                             f"User Query: {query_to_run}\n"
-                            "Provide a direct, clinically reasoned response using the analysis data above."
+                            "Instructions: Provide a comprehensive, direct, evidence-based clinical answer using the specific findings, numbers, and discovered phenotype traits above."
                         )
                         reply = explain_analysis(context_prompt)
                         st.markdown(reply)
@@ -1170,54 +1413,85 @@ elif app_mode == "🩺 Image & Scan Report":
         </div>
     """, unsafe_allow_html=True)
 
-    supported_types = ["pdf", "png", "jpg", "jpeg", "bmp", "tiff", "tif"]
+    supported_types = ["pdf", "png", "jpg", "jpeg", "bmp", "tiff", "tif", "webp"]
     report_file = st.file_uploader(
-        "Upload Radiology Scan or Imaging Report",
+        "Upload Radiology Scan, Medication Image, or Clinical Report",
         type=supported_types,
         key="main_img_file_uploader",
-        help="Upload radiology scan report or PDF. Text is automatically extracted via OCR."
+        help="Upload radiology scan, medication box, blister pack, prescription slip, or PDF report."
     )
 
     if report_file:
         if st.session_state.get("scan_filename") != report_file.name:
-            with st.spinner("Extracting clinical text from scan report via OCR engine..."):
+            with st.spinner("🔍 Extracting clinical text & analyzing medical scan..."):
                 extracted_text = extract_text_from_file(report_file)
                 st.session_state.scan_extracted_text = extracted_text
                 st.session_state.scan_filename = report_file.name
+                
+                # Automatically perform deep clinical / diagnostic analysis
+                if extracted_text and not extracted_text.startswith("[Error]"):
+                    analysis = analyze_image_report(report_file.name, extracted_text)
+                    st.session_state.scan_report_analysis = analysis
+                else:
+                    st.session_state.scan_report_analysis = ""
+
                 update_analysis_session_data(
                     active_session["id"],
                     title=f"Scan: {report_file.name}",
                     filename=report_file.name,
-                    data_dict={"extracted_text": extracted_text}
+                    data_dict={
+                        "extracted_text": extracted_text,
+                        "analysis": st.session_state.scan_report_analysis
+                    }
                 )
 
     extracted_text = st.session_state.scan_extracted_text
+    current_fname = st.session_state.get("scan_filename", "")
+    mod_info = detect_scan_modality(current_fname, extracted_text or "")
 
     if extracted_text:
-        st.success(f"✓ Extracted text from {st.session_state.get('scan_filename', 'uploaded scan')}")
-        with st.expander("📝 Extracted Report Text Preview", expanded=False):
-            st.text_area("OCR / Clinical Text", extracted_text, height=180, label_visibility="collapsed")
+        if extracted_text.startswith("[Error]"):
+            st.error(f"⚠️ {extracted_text}")
+        elif extracted_text.startswith("[Warning]"):
+            st.warning(f"ℹ️ {extracted_text}")
+        else:
+            st.success(f"✓ Processed {current_fname} — {mod_info['label']}")
+            
+            # Display split visual scan preview and extracted text
+            col_img_prev, col_ocr_prev = st.columns([1, 1])
+            with col_img_prev:
+                if report_file and is_image_file(current_fname):
+                    st.image(report_file, caption=f"📸 Scan Image: {current_fname}", use_container_width=True)
+                else:
+                    st.info(f"📄 Document File: `{current_fname}`")
+            
+            with col_ocr_prev:
+                st.markdown(f"**Detected Category**: `{mod_info['label']}`")
+                st.text_area("📝 Extracted Report / Clinical Text", extracted_text, height=260)
     st.markdown("</div>", unsafe_allow_html=True)
 
     if not extracted_text and not st.session_state.scan_report_analysis:
-        st.info("💡 **Ready to begin**: Upload a radiology report (PDF, Image, CT, X-ray) above to evaluate findings and clinical impressions.")
+        st.info("💡 **Ready to begin**: Upload a radiology report (PDF, Image, CT, X-ray) or medication scan above to evaluate findings and clinical impressions.")
     else:
-        # Step 2: Clinical Impression
-        st.markdown("""
+        # Step 2: Clinical / Radiology AI Analysis
+        badge_name = mod_info.get("badge", "Clinical Reasoning Model")
+        card_title = "Clinical Pharmacology & Safety Analysis" if mod_info["category"] == "medication" else "Radiology Impression & AI Diagnostic Summary"
+        
+        st.markdown(f"""
         <div class="action-card">
             <div class="action-card-header">
                 <div class="action-card-title">
                     <span class="step-badge">2</span>
-                    Radiology Impression & AI Diagnostic Summary
+                    {card_title}
                 </div>
-                <span class="chip-blue">Radiology Reasoning Model</span>
+                <span class="chip-blue">{badge_name}</span>
             </div>
         """, unsafe_allow_html=True)
 
-        if not st.session_state.scan_report_analysis:
-            if st.button("🔍 Generate Clinical Radiology Analysis", use_container_width=True, key="btn_analyze_scan", type="primary"):
-                with st.spinner("Analyzing radiological findings and extracting clinical impressions..."):
-                    analysis = analyze_image_report(st.session_state.get("scan_filename", "scan_report"), extracted_text or "")
+        if not st.session_state.scan_report_analysis and extracted_text and not extracted_text.startswith("[Error]"):
+            if st.button("🔍 Generate Comprehensive Clinical Analysis", use_container_width=True, key="btn_analyze_scan", type="primary"):
+                with st.spinner("Generating clinical and pharmacological diagnostic analysis..."):
+                    analysis = analyze_image_report(current_fname, extracted_text or "")
                     st.session_state.scan_report_analysis = analysis
                     update_analysis_session_data(
                         active_session["id"],
@@ -1230,29 +1504,42 @@ elif app_mode == "🩺 Image & Scan Report":
             st.markdown(st.session_state.scan_report_analysis)
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # Step 3: Interactive Radiology Copilot
+            col_btn1, _ = st.columns([1, 3])
+            with col_btn1:
+                if st.button("🔄 Re-Analyze Scan", key="btn_reanalyze_scan", use_container_width=True):
+                    with st.spinner("Re-evaluating clinical findings..."):
+                        analysis = analyze_image_report(current_fname, extracted_text or "", temperature=0.3)
+                        st.session_state.scan_report_analysis = analysis
+                        update_analysis_session_data(
+                            active_session["id"],
+                            data_dict={"analysis": analysis, "extracted_text": extracted_text}
+                        )
+                        st.rerun()
+
+            # Step 3: Interactive Clinical AI Assistant
             st.markdown("<hr style='border-color:#1C263A;'>", unsafe_allow_html=True)
-            st.markdown("##### 💬 Interactive Radiology AI Assistant")
-            st.markdown("<p style='font-size:13px; color:#94A3B8;'>Ask follow-up questions about this specific scan's impression, abnormal findings, or follow-up protocols.</p>", unsafe_allow_html=True)
+            st.markdown("##### 💬 Interactive Clinical & Pharmacology Assistant")
+            st.markdown("<p style='font-size:13px; color:#94A3B8;'>Ask follow-up questions about this specific medication, dosing rules, drug interactions, or radiological follow-up protocols.</p>", unsafe_allow_html=True)
 
             img_messages = get_analysis_messages(active_session["id"])
             for msg in img_messages:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-            user_query = st.chat_input("Ask about this scan (e.g. 'What follow-up imaging is recommended?')...", key="chat_img_input")
+            user_query = st.chat_input("Ask about this scan/medication (e.g. 'What are the main drug interactions for Risperdal?')...", key="chat_img_input")
             if user_query:
                 add_analysis_message(active_session["id"], "user", user_query)
                 with st.chat_message("user"):
                     st.markdown(user_query)
 
                 with st.chat_message("assistant"):
-                    with st.spinner("Evaluating radiology findings..."):
+                    with st.spinner("Evaluating clinical inquiry..."):
                         context_prompt = (
-                            f"Scan Report: {st.session_state.get('scan_filename', 'Radiology Report')}\n"
+                            f"Document / Scan: {current_fname}\n"
+                            f"Category: {mod_info['label']}\n"
                             f"Extracted Text:\n{extracted_text}\n\n"
-                            f"Radiology Impression:\n{st.session_state.scan_report_analysis}\n\n"
-                            f"Question: {user_query}"
+                            f"Clinical Analysis:\n{st.session_state.scan_report_analysis}\n\n"
+                            f"User Question: {user_query}"
                         )
                         reply = explain_image_report(context_prompt)
                         st.markdown(reply)

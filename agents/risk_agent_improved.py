@@ -15,8 +15,8 @@ import time
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.schema_analyzer import SchemaAnalyzer, ColumnType
-from utils.intelligent_analyzer import IntelligentAnalyzer
+from utils.data_profiling import SchemaAnalyzer, ColumnType
+from utils.core_pipeline import IntelligentAnalyzer
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -517,7 +517,7 @@ class HealthcareRiskPredictor:
             title="Model Performance Metrics",
             template="plotly_dark"
         )
-        figures.append(("Performance Metrics", fig_metrics))
+        # Performance metrics are represented in metrics dictionary rather than dataset graphs
         
         # 3. Feature Importance
         if feature_importance is not None:
